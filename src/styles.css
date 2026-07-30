@@ -125,6 +125,7 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .auth-card label:not(.checkbox) { display: grid; gap: 8px; font-size: 12px; font-weight: 700; }
 .auth-card input { width: 100%; height: 49px; padding: 0 14px; color: var(--ink); border: 1px solid var(--line); border-radius: 12px; outline: 0; background: #fbfcfb; }
 .auth-card input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(44,178,163,.12); }
+.auth-error { margin: 0; padding: 11px 13px; color: #8f3027; border: 1px solid #efc3be; border-radius: 10px; background: #fff3f1; font-size: 12px; line-height: 1.45; }
 .divider { height: 1px; margin: 25px 0; position: relative; background: var(--line); text-align: center; }
 .divider span { position: relative; top: -8px; padding: 0 12px; color: #97a2a5; background: white; font-size: 11px; }
 .checkbox { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -158,7 +159,12 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) 112px; position: relative; background: white; }
 .remote-video { min-height: 0; overflow: hidden; position: relative; background: #102830; border-radius: 29px 0 0 0; }
 .remote-video > img, .remote-video > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.remote-video > video:empty { display: none; }
+.remote-video__stream { z-index: 1; opacity: 0; transition: opacity .2s ease; }
+.remote-video__stream.is-active { opacity: 1; }
+.remote-video__demo { z-index: 1; }
+.remote-video__audio { display: none; }
+.remote-video__waiting { position: absolute; z-index: 2; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 30px; color: #b9cccf; text-align: center; }
+.remote-video__waiting svg { color: #80d9cf; font-size: 42px; }
 .video-tools { position: absolute; z-index: 3; top: 22px; left: 26px; display: flex; gap: 9px; }
 .video-tools button { width: 44px; height: 44px; display: grid; place-items: center; color: white; border: 0; border-radius: 50%; background: rgba(8, 31, 40, .72); font-size: 22px; }
 .participant-label { position: absolute; z-index: 2; left: 18px; bottom: 17px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; color: white; background: rgba(7,31,42,.55); backdrop-filter: blur(8px); font-size: 11px; }

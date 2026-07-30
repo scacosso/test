@@ -35,15 +35,19 @@ import {
   useState
 } from "react";
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { connectLiveKitSession, disconnectLiveKitSession } from "./livekit-session";
 
 type Locale = "es" | "en";
 type ChatState =
   | "permission"
   | "denied"
   | "searching"
+  | "connecting"
   | "connected"
   | "peer-left"
   | "reconnecting"
+  | "auth-required"
+  | "connection-error"
   | "reported"
   | "blocked"
   | "suspended";
@@ -311,11 +315,13 @@ function Landing() {
 }
 
 function AuthPage() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const [submitted, setSubmitted] = useState(false);
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
     fetch("/api/config")
       .then((response) => response.json())
@@ -324,6 +330,8 @@ function AuthPage() {
   }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setAuthError("");
+    setSubmitting(true);
     const form = new FormData(event.currentTarget);
     try {
       const response = await fetch(`/api/auth/${mode === "signup" ? "sign-up" : "sign-in"}/email`, {
@@ -336,10 +344,20 @@ function AuthPage() {
           ...(mode === "signup" ? { dateOfBirth: form.get("birth") } : {})
         })
       });
-      if (response.ok) mode === "signup" ? setSubmitted(true) : navigate("/chat");
+      if (!response.ok) {
+        setAuthError(locale === "es"
+          ? "No pudimos completar el acceso. Comprueba tus datos y que el correo esté verificado."
+          : "We couldn't complete sign-in. Check your details and make sure your email is verified.");
+        return;
+      }
+      if (mode === "signup") setSubmitted(true);
       else navigate("/chat");
     } catch {
-      navigate("/chat");
+      setAuthError(locale === "es"
+        ? "No pudimos comunicarnos con el servidor. Inténtalo de nuevo."
+        : "We couldn't reach the server. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
   };
   const googleSignIn = async () => {
@@ -367,9 +385,17 @@ function AuthPage() {
         {submitted ? (
           <div className="verification">
             <span><Check weight="bold" /></span>
-            <h2>Revisa tu correo</h2>
+            <h2>{locale === "es" ? "Revisa tu correo" : "Check your email"}</h2>
             <p>{t.auth.verify}</p>
-            <button className="button button--primary" onClick={() => navigate("/chat")}>Vista previa</button>
+            <button
+              className="button button--primary"
+              onClick={() => {
+                setSubmitted(false);
+                setMode("signin");
+              }}
+            >
+              {locale === "es" ? "Ya verifiqué mi correo" : "I verified my email"}
+            </button>
           </div>
         ) : (
           <>
@@ -382,11 +408,18 @@ function AuthPage() {
               <label>{t.auth.password}<input name="password" required type="password" minLength={8} autoComplete={mode === "signup" ? "new-password" : "current-password"} placeholder="8+ caracteres" /></label>
               {mode === "signup" && <label>{t.auth.birth}<input name="birth" required type="date" max="2008-07-29" /></label>}
               {mode === "signup" && <label className="checkbox"><input type="checkbox" required /><span>{t.auth.consent}</span></label>}
-              <button className="button button--primary button--full">{mode === "signup" ? t.auth.create : t.auth.signIn}<ArrowRight /></button>
+              {authError && <p className="auth-error" role="alert">{authError}</p>}
+              <button className="button button--primary button--full" disabled={submitting}>
+                {submitting ? (locale === "es" ? "Procesando…" : "Working…") : mode === "signup" ? t.auth.create : t.auth.signIn}
+                {!submitting && <ArrowRight />}
+              </button>
             </form>
             <p className="auth-switch">
               {mode === "signup" ? t.auth.account : "¿Aún no tienes cuenta?"}
-              <button onClick={() => setMode((value) => value === "signup" ? "signin" : "signup")}>
+              <button onClick={() => {
+                setAuthError("");
+                setMode((value) => value === "signup" ? "signin" : "signup");
+              }}>
                 {mode === "signup" ? t.auth.signIn : t.auth.create}
               </button>
             </p>
@@ -402,12 +435,15 @@ function useCamera(enabled: boolean) {
   const [error, setError] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const request = async () => {
+    if (stream) return stream;
     try {
       const media = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setStream(media);
       setError(false);
+      return media;
     } catch {
       setError(true);
+      return null;
     }
   };
   useEffect(() => {
@@ -439,10 +475,15 @@ function ChatPage() {
   const [reportOpen, setReportOpen] = useState(false);
   const [chatActionsOpen, setChatActionsOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [remoteVideoActive, setRemoteVideoActive] = useState(visualDemo);
   const camera = useCamera(state !== "permission");
   const remoteRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const roomRef = useRef<import("livekit-client").Room | null>(null);
+  const connectionGenerationRef = useRef(0);
+  const closingSocketRef = useRef(false);
 
   const sendEnvelope = (type: string, payload: Record<string, unknown> = {}) => {
     const socket = socketRef.current;
@@ -451,26 +492,76 @@ function ChatPage() {
     }
   };
 
+  const clearRemoteMedia = () => {
+    setRemoteVideoActive(false);
+    if (remoteRef.current) remoteRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+  };
+
+  const disconnectRoom = async () => {
+    connectionGenerationRef.current += 1;
+    const room = roomRef.current;
+    roomRef.current = null;
+    clearRemoteMedia();
+    await disconnectLiveKitSession(room);
+  };
+
   const connectLiveKit = async (url: string, token: string) => {
-    const { Room, RoomEvent, Track } = await import("livekit-client");
-    const room = new Room({ adaptiveStream: true, dynacast: true });
-    roomRef.current = room;
-    room.on(RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind === Track.Kind.Video && remoteRef.current) track.attach(remoteRef.current);
+    const stream = mediaStreamRef.current;
+    if (!stream) throw new Error("Camera and microphone are not available.");
+
+    const generation = connectionGenerationRef.current + 1;
+    connectionGenerationRef.current = generation;
+    let connectedRoom: import("livekit-client").Room | null = null;
+    const isCurrentConnection = () => connectionGenerationRef.current === generation;
+    const room = await connectLiveKitSession({
+      url,
+      token,
+      stream,
+      elements: { video: remoteRef.current, audio: remoteAudioRef.current },
+      events: {
+        onRemoteVideoChange: (active) => {
+          if (isCurrentConnection()) setRemoteVideoActive(active);
+        },
+        onReconnecting: () => {
+          if (roomRef.current === connectedRoom) setState("reconnecting");
+        },
+        onReconnected: () => {
+          if (roomRef.current === connectedRoom) setState("connected");
+        },
+        onDisconnected: () => {
+          if (roomRef.current === connectedRoom) {
+            roomRef.current = null;
+            clearRemoteMedia();
+            setState("peer-left");
+          }
+        }
+      }
     });
-    room.on(RoomEvent.Reconnecting, () => setState("reconnecting"));
-    room.on(RoomEvent.Reconnected, () => setState("connected"));
-    room.on(RoomEvent.Disconnected, () => setState("peer-left"));
-    await room.connect(url, token);
+    connectedRoom = room;
+    if (!isCurrentConnection()) {
+      await disconnectLiveKitSession(room);
+      return;
+    }
+    roomRef.current = room;
+    setState("connected");
   };
 
   const enterQueue = async () => {
-    await camera.request();
+    const stream = await camera.request();
+    if (!stream) {
+      setState("denied");
+      return;
+    }
+    mediaStreamRef.current = stream;
     setState("searching");
     setElapsed(0);
+    setMessages([]);
+    clearRemoteMedia();
     const protocol = location.protocol === "https:" ? "wss" : "ws";
     try {
       const socket = new WebSocket(`${protocol}://${location.host}/ws/v1`);
+      closingSocketRef.current = false;
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         socket.send(JSON.stringify({
@@ -489,24 +580,38 @@ function ChatPage() {
       socket.addEventListener("message", async (event) => {
         const message = JSON.parse(String(event.data));
         if (message.type === "match.found") {
-          setState("connected");
-          setMessages([{ mine: false, text: t.chat.messages[0] }]);
+          setState("connecting");
+          setMessages([]);
           if (message.payload.livekitUrl && message.payload.token) {
-            await connectLiveKit(message.payload.livekitUrl, message.payload.token);
+            try {
+              await connectLiveKit(message.payload.livekitUrl, message.payload.token);
+            } catch {
+              clearRemoteMedia();
+              setState("connection-error");
+            }
+          } else {
+            setState("connection-error");
           }
         }
+        if (message.type === "queue.state" && message.payload.state === "searching") setState("searching");
         if (message.type === "chat.message") setMessages((items) => [...items, { mine: false, text: message.payload.text }]);
-        if (message.type === "session.peerLeft") setState("peer-left");
+        if (message.type === "session.peerLeft") {
+          await disconnectRoom();
+          setState("peer-left");
+        }
         if (message.type === "account.sanctioned") setState("suspended");
+        if (message.type === "error") setState("connection-error");
       });
       socket.addEventListener("error", () => undefined);
+      socket.addEventListener("close", (event) => {
+        if (socketRef.current === socket) socketRef.current = null;
+        if (closingSocketRef.current) return;
+        clearRemoteMedia();
+        setState(event.code === 1008 ? "auth-required" : "connection-error");
+      });
     } catch {
-      // The local showcase continues in demo mode when the API is not running.
+      setState("connection-error");
     }
-    window.setTimeout(() => {
-      setState((current) => current === "searching" ? "connected" : current);
-      setMessages((items) => items.length ? items : [{ mine: false, text: t.chat.messages[0] }]);
-    }, 1600);
   };
 
   useEffect(() => {
@@ -522,8 +627,11 @@ function ChatPage() {
     camera.stream?.getVideoTracks().forEach((track) => { track.enabled = !cameraOff; });
   }, [camera.stream, cameraOff]);
   useEffect(() => () => {
+    closingSocketRef.current = true;
     socketRef.current?.close();
-    void roomRef.current?.disconnect();
+    const room = roomRef.current;
+    roomRef.current = null;
+    void disconnectLiveKitSession(room);
   }, []);
 
   const submitMessage = (event: FormEvent) => {
@@ -536,11 +644,30 @@ function ChatPage() {
   };
 
   const next = () => {
+    if (visualDemo) {
+      setMessages([]);
+      setRemoteVideoActive(false);
+      setState("searching");
+      window.setTimeout(() => {
+        setRemoteVideoActive(true);
+        setState("connected");
+      }, 1300);
+      return;
+    }
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      setState("connection-error");
+      return;
+    }
     sendEnvelope("match.next", { language: locale, country: "AR" });
-    void roomRef.current?.disconnect();
+    void disconnectRoom();
     setMessages([]);
     setState("searching");
-    setTimeout(() => setState("connected"), 1300);
+    setElapsed(0);
+  };
+
+  const retryConnection = () => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) next();
+    else void enterQueue();
   };
 
   const finishIncident = (kind: "reported" | "blocked", reason?: string) => {
@@ -574,22 +701,35 @@ function ChatPage() {
       <div className="chat-workspace">
         <section className="stage">
           <div className="remote-video">
-            {state === "connected" || state === "reconnecting" ? (
-              <>
-                <img src="/assets/remote-participant.png" alt="" />
-                <video ref={remoteRef} autoPlay playsInline />
-                <div className="video-tools">
-                  <button aria-label="Video effects"><MagicWand weight="duotone" /></button>
-                  <button aria-label="Safety controls"><ShieldCheck weight="duotone" /></button>
-                </div>
-              </>
-            ) : null}
+            {visualDemo && (state === "connected" || state === "reconnecting") && (
+              <img className="remote-video__demo" src="/assets/remote-participant.png" alt="" />
+            )}
+            <video
+              ref={remoteRef}
+              className={`remote-video__stream ${remoteVideoActive && !visualDemo ? "is-active" : ""}`}
+              aria-label="Remote video"
+              autoPlay
+              playsInline
+            />
+            <audio ref={remoteAudioRef} className="remote-video__audio" autoPlay />
+            {(state === "connected" || state === "reconnecting") && remoteVideoActive && (
+              <div className="video-tools">
+                <button aria-label="Video effects"><MagicWand weight="duotone" /></button>
+                <button aria-label="Safety controls"><ShieldCheck weight="duotone" /></button>
+              </div>
+            )}
+            {state === "connected" && !remoteVideoActive && !visualDemo && (
+              <div className="remote-video__waiting">
+                <VideoCameraSlash weight="duotone" />
+                <span>{locale === "es" ? "Esperando el video de la otra persona…" : "Waiting for the other person's video…"}</span>
+              </div>
+            )}
             {state === "permission" && (
               <StateCard icon={<Camera />} title={t.chat.permissionTitle} body={t.chat.permissionBody}>
                 <button className="button button--primary" onClick={enterQueue}>{t.chat.allow}</button>
               </StateCard>
             )}
-            {camera.error && state !== "connected" && (
+            {state === "denied" && (
               <StateCard icon={<VideoCameraSlash />} title={t.chat.denied} body="">
                 <button className="button button--primary" onClick={enterQueue}>{t.chat.allow}</button>
               </StateCard>
@@ -597,8 +737,21 @@ function ChatPage() {
             {state === "searching" && (
               <StateCard icon={<SpinnerGap className="spin" />} title={t.chat.searching} body={`${elapsed}s · ${elapsed < 10 ? "Idioma + país" : "Mismo idioma"}`} />
             )}
+            {state === "connecting" && (
+              <StateCard icon={<SpinnerGap className="spin" />} title={locale === "es" ? "Conectando video…" : "Connecting video…"} body={locale === "es" ? "La pareja fue encontrada. Estamos preparando la llamada." : "A match was found. We are preparing the call."} />
+            )}
             {state === "peer-left" && <StateCard icon={<SignOut />} title="La otra persona se desconectó" body="Puedes buscar una nueva conexión."><button className="button button--primary" onClick={next}>{t.chat.next}</button></StateCard>}
             {state === "reconnecting" && <StateCard icon={<SpinnerGap className="spin" />} title="Reconectando…" body="Conservamos tu lugar en la conversación." />}
+            {state === "auth-required" && (
+              <StateCard icon={<LockKey />} title={locale === "es" ? "Debes iniciar sesión" : "Sign in required"} body={locale === "es" ? "Usa una cuenta con el correo verificado para entrar al videochat." : "Use an account with a verified email to enter video chat."}>
+                <Link className="button button--primary" to="/auth">{t.auth.signIn}</Link>
+              </StateCard>
+            )}
+            {state === "connection-error" && (
+              <StateCard icon={<Warning />} title={locale === "es" ? "No pudimos conectar la llamada" : "We couldn't connect the call"} body={locale === "es" ? "Comprueba la configuración de LiveKit e inténtalo nuevamente." : "Check the LiveKit configuration and try again."}>
+                <button className="button button--primary" onClick={retryConnection}>{locale === "es" ? "Reintentar" : "Try again"}</button>
+              </StateCard>
+            )}
             {(state === "reported" || state === "blocked") && <StateCard icon={<ShieldCheck />} title={state === "reported" ? t.chat.reported : t.chat.blocked} body=""><button className="button button--primary" onClick={next}>{t.chat.next}</button></StateCard>}
             {state === "suspended" && <StateCard icon={<Warning />} title="Cuenta suspendida" body="Revisa tu correo para conocer el motivo y cómo apelar." />}
           </div>
@@ -614,9 +767,9 @@ function ChatPage() {
             <button className={cameraOff ? "is-off" : ""} onClick={() => setCameraOff((value) => !value)} aria-label="Toggle camera">
               {cameraOff ? <VideoCameraSlash weight="fill" /> : <VideoCamera weight="fill" />}<span>Cámara</span><CaretDown />
             </button>
-            <button className="next-button" onClick={next} disabled={state === "permission"}><PaperPlaneTilt weight="duotone" />{t.chat.next}</button>
-            <button onClick={() => setReportOpen(true)}><Flag weight="fill" /><span>{t.chat.report}</span></button>
-            <button onClick={() => finishIncident("blocked")}><UserMinus weight="fill" /><span>{t.chat.block}</span></button>
+            <button className="next-button" onClick={next} disabled={!["connected", "peer-left", "reported", "blocked"].includes(state)}><PaperPlaneTilt weight="duotone" />{t.chat.next}</button>
+            <button onClick={() => setReportOpen(true)} disabled={state !== "connected"}><Flag weight="fill" /><span>{t.chat.report}</span></button>
+            <button onClick={() => finishIncident("blocked")} disabled={state !== "connected"}><UserMinus weight="fill" /><span>{t.chat.block}</span></button>
           </div>
         </section>
 
