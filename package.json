@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "dev:api": "npm --workspace @nexocam/api run dev",
-    "build": "npm --workspace @nexocam/shared run build && npm --workspace @nexocam/api run build && vite build && node scripts/prepare-sites-build.mjs",
+    "build": "npm run build:runtime && node scripts/prepare-sites-build.mjs",
+    "build:runtime": "npm --workspace @nexocam/shared run build && npm --workspace @nexocam/api run build && vite build",
     "build:web": "vite build",
     "build:api": "npm --workspace @nexocam/api run build",
     "test": "npm --workspace @nexocam/shared test && npm --workspace @nexocam/api test && vitest run && npm run test:sites",

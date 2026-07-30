@@ -7,7 +7,7 @@ RUN npm ci
 
 FROM dependencies AS build
 COPY . .
-RUN npm run build
+RUN npm run build:runtime
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
