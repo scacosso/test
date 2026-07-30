@@ -4,6 +4,7 @@ import {
   CaretDown,
   ChatCircleDots,
   Check,
+  Copy,
   Flag,
   GlobeHemisphereWest,
   Heart,
@@ -52,6 +53,14 @@ type ChatState =
   | "reported"
   | "blocked"
   | "suspended";
+
+type ChatSessionUser = {
+  id?: string;
+  name?: string;
+  email?: string;
+  role?: "user" | "moderator" | "admin" | "superuser";
+  isAnonymous?: boolean;
+};
 
 export const copy = {
   es: {
@@ -586,6 +595,7 @@ function useCamera(enabled: boolean) {
 
 function ChatPage() {
   const { t, locale, setLocale } = useI18n();
+  const navigate = useNavigate();
   const publicConfig = usePublicConfig();
   const visualDemo = new URLSearchParams(location.search).get("demo") === "connected";
   const [state, setState] = useState<ChatState>(visualDemo ? "connected" : "permission");
@@ -606,6 +616,10 @@ function ChatPage() {
   const [cameraOff, setCameraOff] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [chatActionsOpen, setChatActionsOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteStatus, setInviteStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [sessionUser, setSessionUser] = useState<ChatSessionUser | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [remoteVideoActive, setRemoteVideoActive] = useState(visualDemo);
   const camera = useCamera(state !== "permission");
@@ -616,6 +630,44 @@ function ChatPage() {
   const roomRef = useRef<import("livekit-client").Room | null>(null);
   const connectionGenerationRef = useRef(0);
   const closingSocketRef = useRef(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const inviteRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/get-session", { credentials: "include" })
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((session: { user?: ChatSessionUser } | null) => {
+        if (active) setSessionUser(session?.user ?? null);
+      })
+      .catch(() => {
+        if (active) setSessionUser(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const closePopovers = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (accountMenuRef.current && !accountMenuRef.current.contains(target)) setAccountMenuOpen(false);
+      if (inviteRef.current && !inviteRef.current.contains(target)) setInviteOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAccountMenuOpen(false);
+        setInviteOpen(false);
+        setChatActionsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closePopovers);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closePopovers);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
 
   const sendEnvelope = (type: string, payload: Record<string, unknown> = {}) => {
     const socket = socketRef.current;
@@ -812,6 +864,38 @@ function ChatPage() {
     setState(kind);
   };
 
+  const copyInviteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(new URL("/", window.location.origin).toString());
+      setInviteStatus("copied");
+    } catch {
+      setInviteStatus("error");
+    }
+  };
+
+  const signOut = async () => {
+    await fetch("/api/auth/sign-out", {
+      method: "POST",
+      credentials: "include"
+    }).catch(() => undefined);
+    setAccountMenuOpen(false);
+    navigate("/auth", { replace: true });
+  };
+
+  const canOpenAdmin = ["moderator", "admin", "superuser"].includes(sessionUser?.role ?? "");
+  const sessionLabel = sessionUser?.isAnonymous
+    ? (locale === "es" ? "Invitado" : "Guest")
+    : (sessionUser?.name || sessionUser?.email || (locale === "es" ? "Cuenta" : "Account"));
+  const roleLabel = sessionUser?.role === "superuser"
+    ? "Super Admin"
+    : sessionUser?.role === "admin"
+      ? "Admin"
+      : sessionUser?.role === "moderator"
+        ? (locale === "es" ? "Moderador" : "Moderator")
+        : sessionUser
+          ? (locale === "es" ? "Usuario" : "User")
+          : (locale === "es" ? "Sin sesión" : "Signed out");
+
   return (
     <main className="chat-shell">
       <header className="chat-header">
@@ -825,8 +909,51 @@ function ChatPage() {
             <button className={locale === "es" ? "active" : ""} onClick={() => setLocale("es")}>ES</button>
             <button className={locale === "en" ? "active" : ""} onClick={() => setLocale("en")}>EN</button>
           </div>
-          <button className="avatar avatar--photo" aria-label="Account"><img src="/assets/local-participant.png" alt="" /></button>
-          <CaretDown size={14} />
+          <div className="account-menu-wrap" ref={accountMenuRef}>
+            <button
+              type="button"
+              className="account-menu-trigger"
+              aria-label={locale === "es" ? "Abrir menú de cuenta" : "Open account menu"}
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => {
+                setAccountMenuOpen((value) => !value);
+                setInviteOpen(false);
+              }}
+            >
+              <span className="avatar avatar--photo"><img src="/assets/local-participant.png" alt="" /></span>
+              <CaretDown className={accountMenuOpen ? "is-open" : ""} size={14} />
+            </button>
+            {accountMenuOpen && (
+              <div className="account-menu" role="menu">
+                <div className="account-menu__identity">
+                  <strong>{sessionLabel}</strong>
+                  <span>{sessionUser?.email && sessionUser.name ? sessionUser.email : roleLabel}</span>
+                </div>
+                {canOpenAdmin && (
+                  <Link role="menuitem" to="/admin" onClick={() => setAccountMenuOpen(false)}>
+                    <UserCircle weight="duotone" />
+                    {locale === "es" ? "Panel de administración" : "Admin console"}
+                  </Link>
+                )}
+                <Link role="menuitem" to="/safety" onClick={() => setAccountMenuOpen(false)}>
+                  <ShieldCheck weight="duotone" />
+                  {locale === "es" ? "Centro de seguridad" : "Safety center"}
+                </Link>
+                {sessionUser ? (
+                  <button type="button" role="menuitem" onClick={() => void signOut()}>
+                    <SignOut />
+                    {locale === "es" ? "Cerrar sesión" : "Sign out"}
+                  </button>
+                ) : (
+                  <Link role="menuitem" to="/auth?next=/chat" onClick={() => setAccountMenuOpen(false)}>
+                    <UserCircle />
+                    {locale === "es" ? "Iniciar sesión" : "Sign in"}
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -913,7 +1040,47 @@ function ChatPage() {
 
         <aside className="chat-panel">
           <div className="chat-panel__head">
-            <div><strong>Chat</strong><UserPlus /></div>
+            <div className="chat-title">
+              <strong>Chat</strong>
+              <div className="chat-invite-wrap" ref={inviteRef}>
+                <button
+                  type="button"
+                  className="chat-invite"
+                  aria-label={locale === "es" ? "Invitar contacto" : "Invite a contact"}
+                  aria-expanded={inviteOpen}
+                  aria-haspopup="dialog"
+                  onClick={() => {
+                    setInviteOpen((value) => !value);
+                    setInviteStatus("idle");
+                    setAccountMenuOpen(false);
+                  }}
+                >
+                  <UserPlus />
+                </button>
+                {inviteOpen && (
+                  <div
+                    className="invite-popover"
+                    role="dialog"
+                    aria-label={locale === "es" ? "Invitar a NexoCam" : "Invite to NexoCam"}
+                  >
+                    <strong>{locale === "es" ? "Invitar a alguien" : "Invite someone"}</strong>
+                    <p>
+                      {locale === "es"
+                        ? "Comparte NexoCam con un contacto. El enlace no fuerza un emparejamiento entre ustedes."
+                        : "Share NexoCam with a contact. The link does not force a match between you."}
+                    </p>
+                    <button type="button" onClick={() => void copyInviteLink()}>
+                      <Copy weight="duotone" />
+                      {inviteStatus === "copied"
+                        ? (locale === "es" ? "Enlace copiado" : "Link copied")
+                        : inviteStatus === "error"
+                          ? (locale === "es" ? "No se pudo copiar" : "Could not copy")
+                          : (locale === "es" ? "Copiar enlace" : "Copy link")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
             <button className="chat-menu" aria-label="Chat menu" onClick={() => setChatActionsOpen((value) => !value)}>•••</button>
             {chatActionsOpen && (
               <div className="chat-actions">

@@ -142,7 +142,7 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .verification p { max-width: 360px; color: var(--muted); line-height: 1.6; }
 
 .chat-shell { min-height: 100vh; background: #eef2f1; }
-.chat-header { height: 94px; padding: 0 32px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; background: white; border-bottom: 1px solid #dfe5e4; }
+.chat-header { position: relative; z-index: 20; height: 94px; padding: 0 32px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; background: white; border-bottom: 1px solid #dfe5e4; }
 .chat-header .logo__mark { display: none; }
 .chat-header .logo { font-size: 27px; }
 .chat-header__status { margin-left: 45px; display: flex; align-items: center; gap: 28px; }
@@ -159,6 +159,19 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .avatar { width: 40px; height: 40px; display: grid; place-items: center; padding: 0; color: #92a2a7; background: #edf1f1; border: 0; border-radius: 50%; font-size: 30px; }
 .avatar--photo { overflow: hidden; }
 .avatar--photo img { width: 100%; height: 100%; object-fit: cover; }
+.account-menu-wrap { position: relative; }
+.account-menu-trigger { min-width: 62px; height: 48px; padding: 4px 4px 4px 5px; display: flex; align-items: center; justify-content: space-between; gap: 7px; color: #52666d; border: 1px solid transparent; border-radius: 25px; background: transparent; transition: background .16s ease, border-color .16s ease; }
+.account-menu-trigger:hover, .account-menu-trigger[aria-expanded="true"] { border-color: #e0e6e5; background: #f5f8f7; }
+.account-menu-trigger > svg { transition: transform .16s ease; }
+.account-menu-trigger > svg.is-open { transform: rotate(180deg); }
+.account-menu { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: 270px; padding: 8px; display: grid; gap: 3px; color: var(--ink); border: 1px solid var(--line); border-radius: 14px; background: white; box-shadow: 0 18px 45px rgba(7,31,42,.17); }
+.account-menu__identity { padding: 12px 12px 13px; border-bottom: 1px solid var(--line); }
+.account-menu__identity strong, .account-menu__identity span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-menu__identity strong { font-size: 13px; }
+.account-menu__identity span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.account-menu > a, .account-menu > button { min-height: 42px; padding: 0 11px; display: flex; align-items: center; gap: 10px; color: var(--ink); border: 0; border-radius: 9px; background: white; font-size: 12px; text-align: left; text-decoration: none; }
+.account-menu > a:hover, .account-menu > button:hover { background: #f2f6f5; }
+.account-menu > a svg, .account-menu > button svg { color: var(--teal-dark); font-size: 18px; }
 .chat-workspace { height: calc(100vh - 94px); min-height: 590px; display: grid; grid-template-columns: minmax(0, 1fr) 34%; }
 .stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) 112px; position: relative; background: white; }
 .remote-video { min-height: 0; overflow: hidden; position: relative; background: #102830; border-radius: 29px 0 0 0; }
@@ -193,8 +206,16 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .chat-panel { min-height: 0; display: grid; grid-template-rows: 86px 1fr 78px 112px; background: white; border-left: 1px solid #dfe5e4; }
 .chat-panel__head { position: relative; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e8eceb; }
 .chat-panel__head > div { display: flex; align-items: center; gap: 8px; }
-.chat-panel__head > div:first-child svg { margin-left: 25px; color: #738589; font-size: 22px; }
 .chat-panel__head strong { font-size: 17px; }
+.chat-title { position: relative; }
+.chat-invite-wrap { position: relative; display: flex; align-items: center; }
+.chat-invite { width: 38px; height: 38px; margin-left: 14px; display: grid; place-items: center; color: #738589; border: 0; border-radius: 50%; background: transparent; font-size: 22px; transition: color .16s ease, background .16s ease; }
+.chat-invite:hover, .chat-invite[aria-expanded="true"] { color: var(--teal-dark); background: #edf7f5; }
+.invite-popover { position: absolute; z-index: 9; top: 46px; left: -62px; width: 300px; padding: 17px; color: var(--ink); border: 1px solid var(--line); border-radius: 14px; background: white; box-shadow: 0 16px 40px rgba(7,31,42,.16); }
+.chat-panel__head .invite-popover strong { display: block; font-size: 14px; }
+.invite-popover p { margin: 7px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.invite-popover > button { width: 100%; min-height: 42px; padding: 0 13px; display: flex; align-items: center; justify-content: center; gap: 8px; color: white; border: 0; border-radius: 10px; background: var(--teal-dark); font-size: 11px; font-weight: 700; }
+.invite-popover > button svg { font-size: 18px; }
 .chat-menu { color: #52666d; border: 0; background: transparent; font-weight: 900; letter-spacing: 2px; }
 .chat-actions { position: absolute; z-index: 8; top: 65px; right: 20px; width: 145px; padding: 6px; display: grid !important; gap: 3px !important; border: 1px solid var(--line); border-radius: 11px; background: white; box-shadow: 0 12px 30px rgba(7,31,42,.14); }
 .chat-actions button { min-height: 38px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--ink); border: 0; border-radius: 7px; background: white; font-size: 11px; text-align: left; }
@@ -342,6 +363,12 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
   .chat-panel { grid-template-rows: 52px 1fr 65px; border-left: 0; border-top: 1px solid var(--line); }
   .connection-footer { display: none; }
   .chat-panel__head { padding: 0 12px; }
+  .chat-languages { margin-right: 5px; }
+  .chat-languages button { width: 40px; height: 36px; }
+  .account-menu-trigger { min-width: 55px; }
+  .account-menu { position: fixed; top: 68px; right: 10px; width: min(270px, calc(100vw - 20px)); }
+  .chat-invite { margin-left: 6px; }
+  .invite-popover { position: fixed; top: auto; right: 10px; bottom: 74px; left: 10px; width: auto; }
   .messages { padding: 12px; }
   .message-form { padding: 10px 12px; }
   .legal-page { padding: 70px 20px; }
