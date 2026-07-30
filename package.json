@@ -1,0 +1,44 @@
+{
+  "name": "nexocam",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:api": "npm --workspace @nexocam/api run dev",
+    "build": "npm --workspace @nexocam/shared run build && npm --workspace @nexocam/api run build && vite build && node scripts/prepare-sites-build.mjs",
+    "build:web": "vite build",
+    "build:api": "npm --workspace @nexocam/api run build",
+    "test": "npm --workspace @nexocam/shared test && npm --workspace @nexocam/api test && vitest run && npm run test:sites",
+    "test:e2e": "playwright test",
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "typecheck": "npm --workspace @nexocam/shared run build && tsc --noEmit && npm --workspace @nexocam/api run typecheck",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/manrope": "^5.2.8",
+    "@livekit/components-react": "^2.9.17",
+    "@phosphor-icons/react": "^2.1.10",
+    "livekit-client": "^2.15.13",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.6",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "jsdom": "^27.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.0.8"
+  }
+}

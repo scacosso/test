@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+*.err
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,22 @@
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: true
+turn:
+  enabled: true
+  udp_port: 3478
+  relay_range_start: 50000
+  relay_range_end: 50100
+redis:
+  address: redis:6379
+keys:
+  devkey: replace-with-32-random-characters
+room:
+  auto_create: false
+  empty_timeout: 60
+  max_participants: 3
+logging:
+  level: info
