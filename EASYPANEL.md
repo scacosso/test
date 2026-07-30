@@ -45,6 +45,15 @@ https://<app-domain>/health/ready
 The first endpoint must return `{"status":"ok"}` and the second must return a
 ready status after migrations complete.
 
+If moderation reports an invalid or incorrectly padded evidence key, rotate only
+that value so existing database and object-storage credentials remain unchanged:
+
+```bash
+npm run easypanel:evidence-key
+```
+
+Replace only `EVIDENCE_ENCRYPTION_KEY` in EasyPanel, save, and redeploy.
+
 ## Manual alternative: individual services
 
 Create one EasyPanel project with these services:
@@ -117,7 +126,7 @@ MAX_CONCURRENT_INFERENCE=2
 ONNX_THREADS=2
 ```
 
-The LiveKit API key and secret must exactly match the `keys` entry in its config. Store `EVIDENCE_ENCRYPTION_KEY` outside MinIO and include it in encrypted backups; losing it makes evidence unrecoverable.
+The LiveKit API key and secret must exactly match the `keys` entry in its config. `EVIDENCE_ENCRYPTION_KEY` must decode to exactly 32 bytes; the generator emits an EasyPanel-safe, unpadded Base64url value. Store it outside MinIO and include it in encrypted backups; losing it makes evidence unrecoverable.
 
 Google sign-in remains hidden until `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are present. Add the Better Auth callback URL shown by the provider under the generated app domain. Configure SMTP to enable verification emails.
 

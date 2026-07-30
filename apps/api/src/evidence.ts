@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "./config.js";
 import { pool } from "./db.js";
+import { decodeEvidenceKey } from "./evidence-key.js";
 
 const s3 = config.s3AccessKey && config.s3SecretKey
   ? new S3Client({
@@ -14,9 +15,7 @@ const s3 = config.s3AccessKey && config.s3SecretKey
 
 function keyMaterial() {
   if (!config.evidenceEncryptionKey) return null;
-  const key = Buffer.from(config.evidenceEncryptionKey, "base64");
-  if (key.length !== 32) throw new Error("EVIDENCE_ENCRYPTION_KEY must be 32 bytes encoded as base64.");
-  return key;
+  return decodeEvidenceKey(config.evidenceEncryptionKey);
 }
 
 export async function storeEncryptedChat(

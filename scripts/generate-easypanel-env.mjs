@@ -4,6 +4,7 @@ const appHost = process.argv[2] ?? "app.example.com";
 const livekitHost = process.argv[3] ?? "livekit.example.com";
 const hex = (bytes) => randomBytes(bytes).toString("hex");
 const base64Key = () => randomBytes(32).toString("base64");
+const base64UrlKey = () => randomBytes(32).toString("base64url");
 
 if (!/^[a-z0-9.-]+$/i.test(appHost) || !/^[a-z0-9.-]+$/i.test(livekitHost)) {
   throw new Error("Pass hostnames only, without https://, paths, or trailing slashes.");
@@ -23,7 +24,7 @@ const values = {
   S3_BUCKET: "nexocam-evidence",
   S3_ACCESS_KEY: `nexocam${hex(4)}`,
   S3_SECRET_KEY: hex(32),
-  EVIDENCE_ENCRYPTION_KEY: base64Key(),
+  EVIDENCE_ENCRYPTION_KEY: base64UrlKey(),
   MODERATION_SERVICE_TOKEN: hex(32),
   MAX_CONCURRENT_USERS: "100",
   SAMPLE_SECONDS: "3",

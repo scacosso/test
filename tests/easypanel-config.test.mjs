@@ -9,6 +9,11 @@ const generated = execFileSync(
   ["scripts/generate-easypanel-env.mjs", "app.nexocam.test", "livekit.nexocam.test"],
   { encoding: "utf8" }
 );
+const rotatedEvidenceKey = execFileSync(
+  process.execPath,
+  ["scripts/generate-evidence-key.mjs"],
+  { encoding: "utf8" }
+).trim().split("=", 2)[1];
 const environment = Object.fromEntries(
   generated
     .split(/\r?\n/)
@@ -38,6 +43,9 @@ test("generates every environment value required by Compose", () => {
 test("generates correctly sized encryption and URL-safe infrastructure secrets", () => {
   assert.equal(Buffer.from(environment.EVIDENCE_ENCRYPTION_KEY, "base64").length, 32);
   assert.equal(Buffer.from(environment.BETTER_AUTH_SECRET, "base64").length, 32);
+  assert.match(environment.EVIDENCE_ENCRYPTION_KEY, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(Buffer.from(rotatedEvidenceKey, "base64url").length, 32);
+  assert.match(rotatedEvidenceKey, /^[A-Za-z0-9_-]{43}$/);
   for (const key of ["POSTGRES_PASSWORD", "REDIS_PASSWORD", "LIVEKIT_API_SECRET", "S3_SECRET_KEY"]) {
     assert.match(environment[key], /^[a-f0-9]+$/);
   }

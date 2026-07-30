@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import io
 import json
@@ -21,6 +20,7 @@ from livekit import api, rtc
 from opennsfw_onnx import NSFWClassifier
 from PIL import Image
 from prometheus_client import Counter, Gauge, start_http_server
+from key_material import decode_evidence_key
 
 FRAMES_CLASSIFIED = Counter("nexocam_frames_classified_total", "Frames classified")
 INCIDENTS = Counter("nexocam_moderation_incidents_total", "Moderation incidents", ["label"])
@@ -49,9 +49,7 @@ class EvidenceStore:
             aws_secret_access_key=os.environ["S3_SECRET_KEY"],
             region_name=os.getenv("S3_REGION", "us-east-1"),
         )
-        key = base64.b64decode(os.environ["EVIDENCE_ENCRYPTION_KEY"])
-        if len(key) != 32:
-            raise ValueError("EVIDENCE_ENCRYPTION_KEY must decode to 32 bytes")
+        key = decode_evidence_key(os.environ["EVIDENCE_ENCRYPTION_KEY"])
         self.cipher = AESGCM(key)
 
     def put(self, session_id: str, sample: Sample) -> dict[str, str]:

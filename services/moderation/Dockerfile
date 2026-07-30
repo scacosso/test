@@ -9,7 +9,7 @@ WORKDIR /app
 COPY services/moderation/requirements.txt services/moderation/requirements-model.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --no-deps --require-hashes -r requirements-model.txt
-COPY services/moderation/moderator.py .
+COPY services/moderation/moderator.py services/moderation/key_material.py ./
 USER moderator
 EXPOSE 8081
 HEALTHCHECK --interval=20s --timeout=3s --start-period=20s --retries=3 \
