@@ -30,6 +30,10 @@ LiveKit as one EasyPanel Compose service.
 7. Open the LiveKit TCP/UDP ports listed below in both EasyPanel and the VPS
    provider firewall.
 
+Do not leave `LIVEKIT_PUBLIC_URL=wss://livekit.example.com`. That hostname is
+only a placeholder. Create the second generated EasyPanel domain first and use
+its real hostname when running the environment generator.
+
 The Compose file deliberately does not contain real secrets. A Dockerfile cannot
 create durable multi-container services or share generated credentials safely;
 Compose is the correct deployment unit for this stack.
@@ -43,6 +47,17 @@ https://<app-domain>/health/ready
 
 The first endpoint must return `{"status":"ok"}` and the second must return a
 ready status after migrations complete.
+
+If two clients remain on **Buscando una persona** or the app logs
+`MATCH_SETUP_FAILED`, check these items:
+
+1. `LIVEKIT_PUBLIC_URL` is the real WSS domain routed to `livekit:7880`, not an
+   `example.com` placeholder.
+2. `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` exactly match the LiveKit service.
+3. The app service has `LIVEKIT_INTERNAL_URL=ws://livekit:7880` (the supplied
+   Compose file sets this automatically).
+4. TCP `7881` and UDP `7882`, `3478`, and `50000-50100` are allowed by both the
+   VPS firewall and the provider firewall.
 
 If moderation reports an invalid or incorrectly padded evidence key, rotate only
 that value so existing database and object-storage credentials remain unchanged:

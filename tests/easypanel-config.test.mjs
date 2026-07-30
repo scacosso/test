@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -38,6 +38,12 @@ test("generates every environment value required by Compose", () => {
   for (const key of new Set(requiredKeys)) assert.ok(environment[key], `${key} must be generated`);
   assert.equal(environment.APP_URL, "https://app.nexocam.test");
   assert.equal(environment.LIVEKIT_PUBLIC_URL, "wss://livekit.nexocam.test");
+});
+
+test("refuses to generate deploy secrets with placeholder domains", () => {
+  const result = spawnSync(process.execPath, ["scripts/generate-easypanel-env.mjs"], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /<app-host> <livekit-host>/);
 });
 
 test("generates correctly sized encryption and URL-safe infrastructure secrets", () => {

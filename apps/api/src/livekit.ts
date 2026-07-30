@@ -2,7 +2,7 @@ import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { config } from "./config.js";
 
 const roomService = config.livekitApiKey && config.livekitApiSecret
-  ? new RoomServiceClient(config.livekitUrl.replace(/^ws/, "http"), config.livekitApiKey, config.livekitApiSecret)
+  ? new RoomServiceClient(config.livekitInternalUrl.replace(/^ws/, "http"), config.livekitApiKey, config.livekitApiSecret)
   : null;
 
 export async function prepareRoom(roomName: string, identities: string[]) {

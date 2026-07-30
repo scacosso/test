@@ -14,6 +14,7 @@ export const config = {
   smtpUrl: process.env.SMTP_URL,
   emailFrom: process.env.EMAIL_FROM ?? "NexoCam <noreply@nexocam.local>",
   livekitUrl: process.env.LIVEKIT_URL ?? "ws://localhost:7880",
+  livekitInternalUrl: process.env.LIVEKIT_INTERNAL_URL ?? process.env.LIVEKIT_URL ?? "ws://localhost:7880",
   livekitApiKey: process.env.LIVEKIT_API_KEY,
   livekitApiSecret: process.env.LIVEKIT_API_SECRET,
   s3Endpoint: process.env.S3_ENDPOINT ?? "http://localhost:9000",

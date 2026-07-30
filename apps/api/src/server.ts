@@ -10,6 +10,7 @@ import websocket from "@fastify/websocket";
 import { clientEventTypes, queueJoinSchema, reportSchema, wsEnvelopeSchema } from "@nexocam/shared";
 import { z } from "zod";
 import { auth, sessionUser } from "./auth.js";
+import { forwardAuthResponseHeaders } from "./auth-response.js";
 import { isAdultDateOfBirth } from "./auth-policy.js";
 import { config } from "./config.js";
 import {
@@ -26,7 +27,7 @@ import {
   updateFeatureFlags
 } from "./db.js";
 import { prepareRoom, terminateRoom } from "./livekit.js";
-import { Matchmaker } from "./matchmaker.js";
+import { Matchmaker, type Match } from "./matchmaker.js";
 import { readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
@@ -147,7 +148,8 @@ if (authHandler) {
         body
       }));
       reply.code(response.status);
-      response.headers.forEach((value, key) => reply.header(key, value));
+      forwardAuthResponseHeaders(reply, response);
+      reply.header("cache-control", "no-store");
       const responseBody = Buffer.from(await response.arrayBuffer());
       if (response.ok && (isAnonymousSignIn || isEmailSignUp)) {
         let data: { user?: { email?: string; id?: string } } | undefined;
@@ -296,14 +298,83 @@ async function matchFound(left: Client, right: Client) {
   const sessionId = randomUUID();
   const roomName = `nexocam-${sessionId}`;
   const tokens = await prepareRoom(roomName, [left.userId, right.userId]);
+  try {
+    await createSession(sessionId, roomName, left.userId, right.userId);
+  } catch (error) {
+    await terminateRoom(roomName);
+    throw error;
+  }
   sessions.set(sessionId, { id: sessionId, roomName, users: [left.userId, right.userId], messages: [] });
   left.sessionId = right.sessionId = sessionId;
   left.peerId = right.userId;
   right.peerId = left.userId;
   left.queue = right.queue = undefined;
-  await createSession(sessionId, roomName, left.userId, right.userId);
   send(left, "match.found", { sessionId, peerId: right.userId, roomName, token: tokens[0]?.token, livekitUrl: config.livekitUrl });
   send(right, "match.found", { sessionId, peerId: left.userId, roomName, token: tokens[1]?.token, livekitUrl: config.livekitUrl });
+}
+
+async function dispatchMatch(result: Match | null, requestId?: string, attempt = 0): Promise<boolean> {
+  if (!result) return false;
+
+  const left = users.get(result.left.userId);
+  const right = users.get(result.right.userId);
+  const leftIsCurrent = left?.socketId === result.left.socketId;
+  const rightIsCurrent = right?.socketId === result.right.socketId;
+
+  if (!leftIsCurrent || !rightIsCurrent) {
+    app.log.warn({
+      leftUserId: result.left.userId,
+      rightUserId: result.right.userId,
+      leftIsCurrent,
+      rightIsCurrent
+    }, "Discarded a stale queue match");
+    await Promise.all([
+      matcher.release(result.left.userId),
+      matcher.release(result.right.userId)
+    ]);
+
+    if (attempt >= 10) {
+      for (const activeClient of [left, right]) {
+        if (activeClient?.queue && !activeClient.sessionId) {
+          send(activeClient, "queue.state", { state: "searching", waiting: matcher.size }, requestId);
+        }
+      }
+      return false;
+    }
+
+    for (const activeClient of [left, right]) {
+      if (!activeClient?.queue || activeClient.sessionId) continue;
+      const retry = await matcher.join(activeClient.queue);
+      if (retry && await dispatchMatch(retry, requestId, attempt + 1)) return true;
+      send(activeClient, "queue.state", { state: "searching", waiting: matcher.size }, requestId);
+    }
+    return false;
+  }
+
+  try {
+    await matchFound(left, right);
+    return true;
+  } catch (error) {
+    await Promise.all([
+      matcher.release(left.userId),
+      matcher.release(right.userId)
+    ]);
+    left.queue = right.queue = undefined;
+    const payload = {
+      code: "MATCH_SETUP_FAILED",
+      message: "The video service could not create the room. Check the LiveKit deployment."
+    };
+    send(left, "error", payload, requestId);
+    send(right, "error", payload, requestId);
+    app.log.error({
+      err: error,
+      leftUserId: left.userId,
+      rightUserId: right.userId,
+      livekitPublicUrl: config.livekitUrl,
+      livekitInternalUrl: config.livekitInternalUrl
+    }, "Unable to create a LiveKit match");
+    return false;
+  }
 }
 
 async function endSession(client: Client, reason: string, notifyPeer = true) {
@@ -314,7 +385,7 @@ async function endSession(client: Client, reason: string, notifyPeer = true) {
     sessions.delete(session.id);
     await closeSession(session.id, reason);
     await terminateRoom(session.roomName);
-    session.users.forEach((id) => matcher.release(id));
+    await Promise.all(session.users.map((id) => matcher.release(id)));
   }
   const id = client.sessionId;
   client.sessionId = client.peerId = undefined;
@@ -356,10 +427,7 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
       if (message.type === "heartbeat") {
         if (client.queue && !client.sessionId) {
           const result = await matcher.join(client.queue);
-          if (result) {
-            await matchFound(users.get(result.left.userId)!, users.get(result.right.userId)!);
-            return;
-          }
+          if (await dispatchMatch(result, message.requestId)) return;
         }
         send(client, "queue.state", { waiting: matcher.size, stages: matcher.stageCounts }, message.requestId);
         return;
@@ -372,7 +440,7 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
         const filter = queueJoinSchema.parse(message.payload);
         client.queue = { userId, socketId: client.socketId, ...filter, joinedAt: Date.now() };
         const result = await matcher.join(client.queue);
-        if (result) await matchFound(users.get(result.left.userId)!, users.get(result.right.userId)!);
+        if (result) await dispatchMatch(result, message.requestId);
         else send(client, "queue.state", { state: "searching", waiting: matcher.size }, message.requestId);
         return;
       }
@@ -387,7 +455,7 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
         const payload = queueJoinSchema.parse({ language: message.payload.language ?? "es", country: message.payload.country ?? "AR" });
         client.queue = { userId, socketId: client.socketId, ...payload, joinedAt: Date.now() };
         const result = await matcher.join(client.queue);
-        if (result) await matchFound(users.get(result.left.userId)!, users.get(result.right.userId)!);
+        if (result) await dispatchMatch(result, message.requestId);
         else send(client, "queue.state", { state: "searching", waiting: matcher.size }, message.requestId);
         return;
       }
@@ -430,12 +498,13 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
         send(client, "session.ended", { reason: "reported" }, message.requestId);
       }
     } catch (error) {
+      app.log.warn({ err: error, userId }, "WebSocket message failed");
       send(client, "error", { code: "INVALID_MESSAGE", message: "The message could not be processed." });
     }
   });
 
   clientSocket.on("close", async () => {
-    matcher.leave(userId);
+    await matcher.leave(userId);
     await endSession(client, "disconnect");
     clients.delete(client.socketId);
     users.delete(userId);

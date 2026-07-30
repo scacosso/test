@@ -366,6 +366,16 @@ const adultBirthDateMax = (() => {
   return date.toISOString().slice(0, 10);
 })();
 
+async function hasActiveSession() {
+  const response = await fetch("/api/auth/get-session", {
+    credentials: "include",
+    headers: { accept: "application/json" }
+  });
+  if (!response.ok) return false;
+  const data = await response.json() as { user?: { id?: string } } | null;
+  return Boolean(data?.user?.id);
+}
+
 function AuthPage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
@@ -375,6 +385,18 @@ function AuthPage() {
   const [guestSubmitting, setGuestSubmitting] = useState(false);
   const [verificationPending, setVerificationPending] = useState(false);
   const publicConfig = usePublicConfig();
+
+  useEffect(() => {
+    let active = true;
+    void hasActiveSession()
+      .then((signedIn) => {
+        if (active && signedIn) navigate("/chat", { replace: true });
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
 
   useEffect(() => {
     if (!publicConfig.features.registration && mode === "signup") setMode("signin");
@@ -388,6 +410,7 @@ function AuthPage() {
     try {
       const response = await fetch(`/api/auth/${mode === "signup" ? "sign-up" : "sign-in"}/email`, {
         method: "POST",
+        credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: form.get("name"),
@@ -422,6 +445,7 @@ function AuthPage() {
     try {
       const response = await fetch("/api/auth/sign-in/anonymous", {
         method: "POST",
+        credentials: "include",
         headers: {
           "content-type": "application/json",
           "x-nexocam-age-confirmed": "true"
@@ -447,6 +471,7 @@ function AuthPage() {
   const googleSignIn = async () => {
     const response = await fetch("/api/auth/sign-in/social", {
       method: "POST",
+      credentials: "include",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ provider: "google", callbackURL: `${location.origin}/chat` })
     });

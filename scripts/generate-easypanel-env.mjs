@@ -1,10 +1,14 @@
 import { randomBytes } from "node:crypto";
 
-const appHost = process.argv[2] ?? "app.example.com";
-const livekitHost = process.argv[3] ?? "livekit.example.com";
+const appHost = process.argv[2];
+const livekitHost = process.argv[3];
 const hex = (bytes) => randomBytes(bytes).toString("hex");
 const base64Key = () => randomBytes(32).toString("base64");
 const base64UrlKey = () => randomBytes(32).toString("base64url");
+
+if (!appHost || !livekitHost) {
+  throw new Error("Usage: npm run easypanel:env -- <app-host> <livekit-host>");
+}
 
 if (!/^[a-z0-9.-]+$/i.test(appHost) || !/^[a-z0-9.-]+$/i.test(livekitHost)) {
   throw new Error("Pass hostnames only, without https://, paths, or trailing slashes.");

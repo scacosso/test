@@ -59,7 +59,10 @@ export class RedisMatchmaker extends Matchmaker {
     for (const id of ids) {
       if (id === candidate.userId) continue;
       const raw = await this.redis.get(`nexocam:candidate:${id}`);
-      if (!raw) continue;
+      if (!raw) {
+        await this.redis.zrem(key, id);
+        continue;
+      }
       const peer = JSON.parse(raw) as QueueCandidate;
       const blocked = await this.blocked(candidate.userId, peer.userId);
       if (!candidateMatches(candidate, peer, now, () => Boolean(blocked))) continue;
@@ -81,22 +84,20 @@ export class RedisMatchmaker extends Matchmaker {
     return null;
   }
 
-  override leave(userId: string) {
-    void (async () => {
-      const raw = await this.redis.get(`nexocam:candidate:${userId}`);
-      if (!raw) return;
-      const candidate = JSON.parse(raw) as QueueCandidate;
-      await this.redis
-        .multi()
-        .zrem(this.lang(candidate.language), userId)
-        .zrem(this.exact(candidate.language, candidate.country), userId)
-        .del(`nexocam:candidate:${userId}`)
-        .exec();
-      this.localSize = Math.max(0, this.localSize - 1);
-    })();
+  override async leave(userId: string) {
+    const raw = await this.redis.get(`nexocam:candidate:${userId}`);
+    if (!raw) return;
+    const candidate = JSON.parse(raw) as QueueCandidate;
+    await this.redis
+      .multi()
+      .zrem(this.lang(candidate.language), userId)
+      .zrem(this.exact(candidate.language, candidate.country), userId)
+      .del(`nexocam:candidate:${userId}`)
+      .exec();
+    this.localSize = Math.max(0, this.localSize - 1);
   }
 
-  override release(userId: string) {
-    void this.redis.del(`nexocam:active:${userId}`);
+  override async release(userId: string) {
+    await this.redis.del(`nexocam:active:${userId}`);
   }
 }

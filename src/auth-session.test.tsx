@@ -34,10 +34,15 @@ afterEach(() => {
 
 describe("authentication choices", () => {
   it("creates an adult guest session and enters chat", async () => {
+    let signedIn = false;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/config") return jsonResponse(publicConfigResponse);
+      if (url === "/api/auth/get-session") {
+        return jsonResponse(signedIn ? { user: { id: "guest-1", isAnonymous: true } } : null);
+      }
       if (url === "/api/auth/sign-in/anonymous") {
+        signedIn = true;
         return jsonResponse({ user: { id: "guest-1", isAnonymous: true } });
       }
       return jsonResponse({ error: "not_found" }, 404);
@@ -53,6 +58,7 @@ describe("authentication choices", () => {
       "/api/auth/sign-in/anonymous",
       expect.objectContaining({
         method: "POST",
+        credentials: "include",
         headers: expect.objectContaining({ "x-nexocam-age-confirmed": "true" })
       })
     );
@@ -62,6 +68,7 @@ describe("authentication choices", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/config") return jsonResponse(publicConfigResponse);
+      if (url === "/api/auth/get-session") return jsonResponse(null);
       if (url === "/api/auth/sign-up/email") {
         return jsonResponse({ user: { id: "registered-1", emailVerified: false } });
       }
@@ -78,5 +85,20 @@ describe("authentication choices", () => {
 
     await waitFor(() => expect(window.location.pathname).toBe("/chat"));
     expect(screen.queryByText(/revisa tu correo|check your email/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps an existing session signed in when auth is opened again", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/config") return jsonResponse(publicConfigResponse);
+      if (url === "/api/auth/get-session") {
+        return jsonResponse({ user: { id: "registered-1", email: "alex@example.com" } });
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(<BrowserRouter><App /></BrowserRouter>);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/chat"));
   });
 });
