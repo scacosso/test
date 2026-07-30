@@ -1,6 +1,6 @@
 livekit==1.1.13
 livekit-api==1.1.0
-opennsfw-onnx==0.1.0 --hash=sha256:1d060aaba48c92c0f510f2ae29ddbbd98d43daf00877f5b5c253e34e6502f5bd
+onnxruntime==1.23.2
 Pillow==11.3.0
 numpy==2.3.4
 boto3==1.40.64

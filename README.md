@@ -33,9 +33,12 @@ Then open `http://localhost:3001`; Mailpit is at `http://localhost:8025` and Min
 Generate production secrets before deployment:
 
 ```bash
-openssl rand -base64 32
-openssl rand -hex 32
+npm run easypanel:env -- app.example.com livekit.example.com
 ```
+
+For a single EasyPanel Compose deployment, select
+`docker-compose.easypanel.yml` from the repository. It builds the two NexoCam
+images and creates PostgreSQL, Redis, MinIO, the evidence bucket, and LiveKit.
 
 ## Quality gates
 

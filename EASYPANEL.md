@@ -2,7 +2,50 @@
 
 This guide targets one VPS with at least 8 vCPU and 16 GB RAM. Start with the hard application limit of 100 connected users and reduce it to the measured capacity if load testing fails.
 
-## 1. Project and services
+## Recommended: one Compose service
+
+The repository includes `docker-compose.easypanel.yml`, which creates the app,
+moderation worker, PostgreSQL, Redis, MinIO, the private evidence bucket, and
+LiveKit as one EasyPanel Compose service.
+
+1. Generate the environment values locally. Pass hostnames only:
+
+   ```bash
+   npm run easypanel:env -- app.example.com livekit.example.com
+   ```
+
+2. Store the generated output in a password manager.
+3. In EasyPanel, create **Compose Service** and select:
+   - repository: `https://github.com/scacosso/test`
+   - branch: `main`
+   - root path: `/`
+   - compose file: `docker-compose.easypanel.yml`
+4. Paste the generated values into the Compose service environment. Replace
+   `SMTP_URL` and `EMAIL_FROM` with a real transactional mail provider before
+   enabling public registration.
+5. Add two domains:
+   - the app domain routes to service `app`, port `3001`;
+   - the LiveKit domain routes to service `livekit`, port `7880`.
+6. Deploy the Compose service. The `app` container waits for PostgreSQL, Redis,
+   the MinIO bucket, and LiveKit before running repeatable migrations.
+7. Open the LiveKit TCP/UDP ports listed below in both EasyPanel and the VPS
+   provider firewall.
+
+The Compose file deliberately does not contain real secrets. A Dockerfile cannot
+create durable multi-container services or share generated credentials safely;
+Compose is the correct deployment unit for this stack.
+
+After deployment, verify:
+
+```text
+https://<app-domain>/health/live
+https://<app-domain>/health/ready
+```
+
+The first endpoint must return `{"status":"ok"}` and the second must return a
+ready status after migrations complete.
+
+## Manual alternative: individual services
 
 Create one EasyPanel project with these services:
 

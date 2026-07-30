@@ -6,8 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN useradd --create-home --uid 10001 moderator
 WORKDIR /app
-COPY services/moderation/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/moderation/requirements.txt services/moderation/requirements-model.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-deps --require-hashes -r requirements-model.txt
 COPY services/moderation/moderator.py .
 USER moderator
 EXPOSE 8081
