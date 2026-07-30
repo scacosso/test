@@ -34,7 +34,8 @@ export async function getFeatureFlags(): Promise<FeatureFlags> {
 
 export async function updateFeatureFlags(
   updates: Partial<FeatureFlags>,
-  actorId: string
+  actorId: string,
+  reason = "Administrative change"
 ): Promise<FeatureFlags> {
   const entries = Object.entries(updates)
     .filter(([key, value]) => featureFlagKeys.includes(key as FeatureFlagKey) && typeof value === "boolean") as [FeatureFlagKey, boolean][];
@@ -52,9 +53,9 @@ export async function updateFeatureFlags(
       [entries.map(([key]) => key), entries.map(([, value]) => value), actorId]
     );
     await client.query(
-      `insert into audit_log (actor_id, action, target_type, metadata)
-       values ($1, 'feature_flags.updated', 'feature_flags', $2::jsonb)`,
-      [actorId, JSON.stringify(Object.fromEntries(entries))]
+      `insert into audit_log (actor_id, action, target_type, metadata, reason)
+       values ($1, 'feature_flags.updated', 'feature_flags', $2::jsonb, $3)`,
+      [actorId, JSON.stringify(Object.fromEntries(entries)), reason]
     );
     await client.query("commit");
   } catch (error) {

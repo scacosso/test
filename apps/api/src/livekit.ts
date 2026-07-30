@@ -33,3 +33,24 @@ export async function terminateRoom(roomName: string) {
     console.error("Unable to terminate LiveKit room", error);
   }
 }
+
+export async function healthLiveKit() {
+  if (!roomService) return { healthy: false, configured: false, rooms: 0, latencyMs: null };
+  const startedAt = performance.now();
+  try {
+    const rooms = await roomService.listRooms();
+    return {
+      healthy: true,
+      configured: true,
+      rooms: rooms.length,
+      latencyMs: Math.round(performance.now() - startedAt)
+    };
+  } catch {
+    return {
+      healthy: false,
+      configured: true,
+      rooms: 0,
+      latencyMs: Math.round(performance.now() - startedAt)
+    };
+  }
+}

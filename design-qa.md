@@ -80,3 +80,56 @@ No actionable P0, P1, or P2 findings remain.
 - [P3] A future asset iteration could tune the remote subject scale by a few percent to make the photographic crop pixel-closer to the generated mock.
 
 final result: passed
+
+---
+
+# Super Admin console design QA
+
+## Comparison target
+
+- Source visual truth: `design/reference-superadmin-option-3.png`
+- Source pixels: 1487 × 1058
+- Implementation: `/admin`
+- Final desktop screenshot: `design/implementation-superadmin-desktop.png`
+- Final mobile screenshot: `design/implementation-superadmin-mobile.png`
+- Normalized comparison: `design/comparison-superadmin-final.png`
+- Requested CSS viewports: 1440 × 1024 desktop and 390 × 844 mobile
+- Browser-rendered content pixels: 1425 × 1013 desktop and 375 × 811 mobile
+- Device scale factor: 1
+- State: authenticated superuser, real administrative overview, six persisted feature flags, degraded moderation warning, operational metrics, and recent audit activity
+
+## Full-view comparison evidence
+
+The normalized side-by-side comparison preserves the selected option 3 composition: full-height navy navigation rail, compact white governance header, coral degraded-service alert, live metrics column, large feature-control ledger, restrained teal controls, and recent audit table. The implementation uses the same sparse density, border rhythm, typography hierarchy, color family, and information priority while replacing every illustrative value with API-backed fields.
+
+At 390 × 844 the rail becomes a dismissible navigation drawer, the four headline metrics become a readable two-column grid, feature rows become stacked controls, and administrative tables become labeled record cards. There is no horizontal overflow.
+
+## Required product states
+
+Browser-tested:
+
+- authenticated superuser access and permission-filtered navigation;
+- degraded moderation warning and live monitoring health;
+- pending feature change, mandatory reason, atomic apply, success state, and restoration of the saved state;
+- desktop navigation and mobile drawer;
+- 5-second monitoring refresh surface and visible last-update timestamp;
+- ES/EN controls;
+- loading and service error rendering;
+- clean final browser console with no errors or warnings.
+
+Code paths and automated tests cover unauthorized/forbidden routing, empty/error states, self-demotion, guest role restrictions, last-superuser protection, superuser sanction confirmation, evidence access, audit writes, and service heartbeats.
+
+## Findings and iterations
+
+### Iteration 1 — blocked
+
+- [P2] The first mobile capture was taken during the drawer transition, making the navigation appear clipped.
+- [P2] The desktop header omitted the reference date context.
+- Fixes: validated the drawer after its transition, added an icon-library date status, and recaptured both acceptance viewports.
+
+### Iteration 2 — passed
+
+- No actionable P0, P1, or P2 visual differences remain.
+- Remaining P3 differences are intentional data-shape differences: the live API ledger shows audited actions instead of the illustrative “last change” cells and leaves the apply action disabled when there are no pending changes.
+
+final result: passed

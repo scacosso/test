@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -9,6 +9,29 @@ import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { clientEventTypes, queueJoinSchema, reportSchema, wsEnvelopeSchema } from "@nexocam/shared";
 import { z } from "zod";
+import {
+  adminRoles,
+  applyReportAction,
+  createSanction,
+  ensureConfiguredSuperuser,
+  getAdminUser,
+  getOperationalMetrics,
+  getOverviewDatabaseCounts,
+  getReport,
+  getServiceHeartbeats,
+  isRole,
+  listAdminUsers,
+  listAudit,
+  listReports,
+  listSanctions,
+  permissionsFor,
+  recordOperationalMetric,
+  revokeSanction,
+  syncConfiguredSuperusers,
+  updateAdminUserRole,
+  updateServiceHeartbeat,
+  type Role
+} from "./admin.js";
 import { auth, sessionUser } from "./auth.js";
 import { forwardAuthResponseHeaders } from "./auth-response.js";
 import { isAdultDateOfBirth } from "./auth-policy.js";
@@ -26,9 +49,9 @@ import {
   recordConsent,
   updateFeatureFlags
 } from "./db.js";
-import { prepareRoom, terminateRoom } from "./livekit.js";
+import { healthLiveKit, prepareRoom, terminateRoom } from "./livekit.js";
 import { Matchmaker, type Match } from "./matchmaker.js";
-import { readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
+import { healthEvidenceStore, readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
 
@@ -83,6 +106,27 @@ const requestHeaders = (request: FastifyRequest) => {
   }
   return headers;
 };
+const requireRole = async (
+  request: FastifyRequest,
+  reply: FastifyReply,
+  allowed: readonly Role[]
+) => {
+  const user = await sessionUser(requestHeaders(request));
+  if (!user) {
+    reply.code(401).send({ error: "unauthorized" });
+    return null;
+  }
+  if (!allowed.includes(user.role)) {
+    reply.code(403).send({ error: "forbidden" });
+    return null;
+  }
+  return user;
+};
+const requireMutationOrigin = (request: FastifyRequest, reply: FastifyReply) => {
+  if (originAllowed(request)) return true;
+  reply.code(403).send({ error: "origin_not_allowed" });
+  return false;
+};
 const internalAuthorized = (authorization: string | undefined) => {
   if (!config.moderationServiceToken || !authorization?.startsWith("Bearer ")) return false;
   const supplied = Buffer.from(authorization.slice(7));
@@ -127,6 +171,7 @@ if (authHandler) {
       const features = await getFeatureFlags();
       const isAnonymousSignIn = request.method === "POST" && target.pathname.endsWith("/sign-in/anonymous");
       const isEmailSignUp = request.method === "POST" && target.pathname.endsWith("/sign-up/email");
+      const isEmailSignIn = request.method === "POST" && target.pathname.endsWith("/sign-in/email");
 
       if (isAnonymousSignIn && !features.guest_access) {
         return reply.code(403).send({ error: "guest_access_disabled" });
@@ -151,15 +196,18 @@ if (authHandler) {
       forwardAuthResponseHeaders(reply, response);
       reply.header("cache-control", "no-store");
       const responseBody = Buffer.from(await response.arrayBuffer());
-      if (response.ok && (isAnonymousSignIn || isEmailSignUp)) {
+      if (response.ok && (isAnonymousSignIn || isEmailSignUp || isEmailSignIn)) {
         let data: { user?: { email?: string; id?: string } } | undefined;
         try {
           data = JSON.parse(responseBody.toString()) as { user?: { email?: string; id?: string } };
         } catch {
           app.log.warn("Better Auth response did not expose a user id for consent recording");
         }
-        if (data?.user?.id) {
+        if (data?.user?.id && (isAnonymousSignIn || isEmailSignUp)) {
           await recordConsent(data.user.id, "adult_18_attestation", "alpha-1");
+        }
+        if (data?.user?.id && data.user.email && (isEmailSignUp || isEmailSignIn)) {
+          await ensureConfiguredSuperuser({ id: data.user.id, email: data.user.email });
         }
         if (isEmailSignUp && features.email_verification && data?.user?.email) {
           void authHandler.api.sendVerificationEmail({
@@ -184,53 +232,335 @@ if (authHandler) {
   });
 }
 
-const featureFlagUpdateSchema = z.object(
+const featureFlagValuesSchema = z.object(
   Object.fromEntries(
     Object.keys(featureFlagDefaults).map((key) => [key, z.boolean().optional()])
   ) as Record<keyof typeof featureFlagDefaults, z.ZodOptional<z.ZodBoolean>>
 ).partial().refine((value) => Object.keys(value).length > 0, "At least one feature flag is required");
+const featureFlagUpdateSchema = z.object({
+  features: featureFlagValuesSchema,
+  reason: z.string().trim().min(3).max(500)
+});
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  offset: z.coerce.number().int().min(0).max(100_000).default(0)
+});
+const uuidSchema = z.string().uuid();
+const roleUpdateSchema = z.object({
+  role: z.enum(["user", "moderator", "admin", "superuser"]),
+  reason: z.string().trim().min(3).max(500),
+  confirmEmail: z.string().email().optional()
+});
+const reportActionSchema = z.object({
+  action: z.enum(["start_review", "resolve", "dismiss", "temporary_hold"]),
+  reason: z.string().trim().min(3).max(500),
+  durationHours: z.coerce.number().int().min(1).max(24).optional()
+});
+const sanctionCreateSchema = z.object({
+  userId: z.string().min(1).max(128),
+  type: z.enum(["temporary_hold", "suspension"]),
+  reason: z.string().trim().min(3).max(500),
+  expiresAt: z.string().datetime().optional(),
+  confirmEmail: z.string().email().optional()
+});
+const sanctionRevokeSchema = z.object({
+  reason: z.string().trim().min(3).max(500)
+});
+
+app.get("/api/admin/me", async (request, reply) => {
+  const user = await requireRole(request, reply, adminRoles);
+  if (!user) return;
+  reply.header("cache-control", "no-store");
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      isGuest: user.isGuest
+    },
+    permissions: permissionsFor(user.role)
+  };
+});
+
+app.get("/api/admin/overview", async (request, reply) => {
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const [counts, features, audit] = await Promise.all([
+    getOverviewDatabaseCounts(),
+    getFeatureFlags(),
+    listAudit({ limit: 6, offset: 0 })
+  ]);
+  return {
+    generatedAt: new Date().toISOString(),
+    capacity: config.maxConcurrentUsers,
+    connectedUsers: clients.size,
+    queuedUsers: matcher.size,
+    activeSessions: sessions.size,
+    counts,
+    features,
+    recentAudit: audit.items
+  };
+});
 
 app.get("/api/admin/features", async (request, reply) => {
-  const user = await sessionUser(requestHeaders(request));
-  if (!user || !["admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
   return { features: await getFeatureFlags() };
 });
 
 app.patch("/api/admin/features", async (request, reply) => {
-  if (!originAllowed(request)) return reply.code(403).send({ error: "origin_not_allowed" });
-  const user = await sessionUser(requestHeaders(request));
-  if (!user || !["admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
   const parsed = featureFlagUpdateSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: "invalid_feature_flags" });
-  return { features: await updateFeatureFlags(parsed.data, user.id) };
+  return {
+    features: await updateFeatureFlags(parsed.data.features, user.id, parsed.data.reason)
+  };
+});
+
+app.get("/api/admin/users", async (request, reply) => {
+  const user = await requireRole(request, reply, ["admin", "superuser"]);
+  if (!user) return;
+  const raw = request.query as Record<string, unknown>;
+  const pagination = paginationSchema.safeParse(raw);
+  if (!pagination.success) return reply.code(400).send({ error: "invalid_pagination" });
+  const role = typeof raw.role === "string" && isRole(raw.role) ? raw.role : undefined;
+  const status = raw.status === "active" || raw.status === "sanctioned" ? raw.status : undefined;
+  return listAdminUsers({
+    query: typeof raw.query === "string" ? raw.query.trim().slice(0, 100) : undefined,
+    role,
+    status,
+    ...pagination.data
+  });
+});
+
+app.get("/api/admin/users/:id", async (request, reply) => {
+  const user = await requireRole(request, reply, ["admin", "superuser"]);
+  if (!user) return;
+  const id = (request.params as { id: string }).id.slice(0, 128);
+  const target = await getAdminUser(id);
+  if (!target) return reply.code(404).send({ error: "not_found" });
+  return target;
+});
+
+app.patch("/api/admin/users/:id/role", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const parsed = roleUpdateSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_role_update" });
+  const result = await updateAdminUserRole({
+    actorId: user.id,
+    targetId: (request.params as { id: string }).id.slice(0, 128),
+    ...parsed.data
+  });
+  if (!result) return reply.code(503).send({ error: "database_unavailable" });
+  if ("error" in result) {
+    const code = result.error === "not_found" ? 404 : result.error === "confirmation_required" ? 409 : 400;
+    return reply.code(code).send(result);
+  }
+  return result;
 });
 
 app.get("/api/admin/reports", async (request, reply) => {
-  const user = await sessionUser(requestHeaders(request));
-  if (!user || !["moderator", "admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
-  if (!pool) return [];
-  const result = await pool.query(
-    `select r.id, r.reason, r.priority, r.status, r.created_at, count(e.id)::int as evidence_count
-     from reports r
-     left join evidence e on e.report_id = r.id and e.expires_at > now()
-     where status in ('pending', 'reviewing')
-     group by r.id
-     order by case r.priority when 'urgent' then 0 when 'high' then 1 else 2 end, r.created_at asc
-     limit 100`
-  );
-  return result.rows;
+  const user = await requireRole(request, reply, adminRoles);
+  if (!user) return;
+  const raw = request.query as Record<string, unknown>;
+  const pagination = paginationSchema.safeParse(raw);
+  if (!pagination.success) return reply.code(400).send({ error: "invalid_pagination" });
+  return listReports({
+    status: typeof raw.status === "string" ? raw.status.slice(0, 20) : undefined,
+    priority: typeof raw.priority === "string" ? raw.priority.slice(0, 20) : undefined,
+    reason: typeof raw.reason === "string" ? raw.reason.slice(0, 40) : undefined,
+    ...pagination.data
+  });
+});
+
+app.get("/api/admin/reports/:id", async (request, reply) => {
+  const user = await requireRole(request, reply, adminRoles);
+  if (!user) return;
+  const id = (request.params as { id: string }).id;
+  if (!uuidSchema.safeParse(id).success) return reply.code(400).send({ error: "invalid_id" });
+  const report = await getReport(id);
+  if (!report) return reply.code(404).send({ error: "not_found" });
+  return report;
+});
+
+app.post("/api/admin/reports/:id/actions", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, adminRoles);
+  if (!user) return;
+  const id = (request.params as { id: string }).id;
+  const parsed = reportActionSchema.safeParse(request.body);
+  if (!uuidSchema.safeParse(id).success || !parsed.success) {
+    return reply.code(400).send({ error: "invalid_report_action" });
+  }
+  const result = await applyReportAction({
+    actorId: user.id,
+    reportId: id,
+    ...parsed.data
+  });
+  if (!result) return reply.code(404).send({ error: "not_found" });
+  if ("error" in result) return reply.code(409).send(result);
+  if (result.sanctionId) {
+    const client = users.get(result.reportedUserId);
+    if (client) {
+      send(client, "account.sanctioned", { reason: parsed.data.reason });
+      await endSession(client, "administrative-sanction");
+    }
+  }
+  return result;
 });
 
 app.get("/api/admin/evidence/:id", async (request, reply) => {
-  const user = await sessionUser(requestHeaders(request));
-  if (!user || !["moderator", "admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  const user = await requireRole(request, reply, adminRoles);
+  if (!user) return;
   const id = (request.params as { id: string }).id;
-  if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: "invalid_id" });
+  if (!uuidSchema.safeParse(id).success) return reply.code(400).send({ error: "invalid_id" });
   const evidence = await readEncryptedEvidence(id, user.id);
   if (!evidence) return reply.code(404).send({ error: "not_found" });
   reply.header("cache-control", "no-store");
   reply.header("content-security-policy", "default-src 'none'");
   return reply.type(evidence.contentType).send(evidence.body);
+});
+
+app.get("/api/admin/sanctions", async (request, reply) => {
+  const user = await requireRole(request, reply, ["admin", "superuser"]);
+  if (!user) return;
+  const raw = request.query as Record<string, unknown>;
+  const pagination = paginationSchema.safeParse(raw);
+  if (!pagination.success) return reply.code(400).send({ error: "invalid_pagination" });
+  return listSanctions({
+    status: typeof raw.status === "string" ? raw.status.slice(0, 20) : undefined,
+    ...pagination.data
+  });
+});
+
+app.post("/api/admin/sanctions", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["admin", "superuser"]);
+  if (!user) return;
+  const parsed = sanctionCreateSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_sanction" });
+  const result = await createSanction({
+    actorId: user.id,
+    actorRole: user.role,
+    ...parsed.data
+  });
+  if (!result) return reply.code(503).send({ error: "database_unavailable" });
+  if ("error" in result) {
+    const code = result.error === "not_found" ? 404 : result.error === "confirmation_required" ? 409 : 400;
+    return reply.code(code).send(result);
+  }
+  const client = users.get(result.target.id);
+  if (client) {
+    send(client, "account.sanctioned", { reason: parsed.data.reason });
+    await endSession(client, "administrative-sanction");
+  }
+  return reply.code(201).send(result);
+});
+
+app.post("/api/admin/sanctions/:id/revoke", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["admin", "superuser"]);
+  if (!user) return;
+  const id = (request.params as { id: string }).id;
+  const parsed = sanctionRevokeSchema.safeParse(request.body);
+  if (!uuidSchema.safeParse(id).success || !parsed.success) {
+    return reply.code(400).send({ error: "invalid_revocation" });
+  }
+  const sanction = await revokeSanction({
+    actorId: user.id,
+    sanctionId: id,
+    reason: parsed.data.reason
+  });
+  if (!sanction) return reply.code(404).send({ error: "not_found" });
+  return sanction;
+});
+
+app.get("/api/admin/monitoring", async (request, reply) => {
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const rawHours = Number((request.query as { hours?: unknown }).hours ?? 24);
+  const hours = Number.isFinite(rawHours) ? Math.max(1, Math.min(168, Math.round(rawHours))) : 24;
+  const databaseStart = performance.now();
+  let databaseHealth = { healthy: false, latencyMs: null as number | null };
+  try {
+    if (pool) {
+      await pool.query("select 1");
+      databaseHealth = { healthy: true, latencyMs: Math.round(performance.now() - databaseStart) };
+    }
+  } catch {
+    databaseHealth = { healthy: false, latencyMs: Math.round(performance.now() - databaseStart) };
+  }
+  const [history, heartbeats, livekit, storage, redis] = await Promise.all([
+    getOperationalMetrics(hours),
+    getServiceHeartbeats(),
+    healthLiveKit(),
+    healthEvidenceStore(),
+    matcher instanceof RedisMatchmaker
+      ? matcher.health().catch(() => ({ healthy: false, latencyMs: null }))
+      : Promise.resolve({ healthy: true, latencyMs: 0 })
+  ]);
+  return {
+    generatedAt: new Date().toISOString(),
+    current: {
+      connectedUsers: clients.size,
+      queuedUsers: matcher.size,
+      activeSessions: sessions.size,
+      capacity: config.maxConcurrentUsers
+    },
+    services: {
+      database: databaseHealth,
+      redis,
+      livekit,
+      storage,
+      moderation: heartbeats.find((item) => item.service === "moderation") ?? {
+        service: "moderation",
+        status: "offline",
+        details: {},
+        updated_at: null
+      }
+    },
+    history
+  };
+});
+
+app.get("/api/admin/audit", async (request, reply) => {
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const raw = request.query as Record<string, unknown>;
+  const pagination = paginationSchema.safeParse(raw);
+  if (!pagination.success) return reply.code(400).send({ error: "invalid_pagination" });
+  return listAudit({
+    action: typeof raw.action === "string" ? raw.action.slice(0, 100) : undefined,
+    actorId: typeof raw.actorId === "string" ? raw.actorId.slice(0, 128) : undefined,
+    ...pagination.data
+  });
+});
+
+app.post("/api/internal/moderation/heartbeat", async (request, reply) => {
+  if (!internalAuthorized(request.headers.authorization)) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+  const parsed = z.object({
+    status: z.enum(["healthy", "degraded", "offline"]).default("healthy"),
+    activeSessions: z.number().int().min(0).max(config.maxConcurrentUsers).default(0),
+    inflight: z.number().int().min(0).max(1_000).default(0),
+    lagSeconds: z.number().min(0).max(86_400).default(0)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_heartbeat" });
+  await updateServiceHeartbeat({
+    service: "moderation",
+    status: parsed.data.status,
+    details: {
+      activeSessions: parsed.data.activeSessions,
+      inflight: parsed.data.inflight,
+      lagSeconds: parsed.data.lagSeconds
+    }
+  });
+  return reply.code(202).send({ accepted: true });
 });
 
 app.post("/api/internal/moderation/event", async (request, reply) => {
@@ -517,7 +847,21 @@ if (config.nodeEnv === "production") {
   app.setNotFoundHandler((_request, reply) => reply.sendFile("index.html"));
 }
 
+await syncConfiguredSuperusers()
+  .then((promoted) => {
+    if (promoted > 0) app.log.info({ promoted }, "Configured superusers synchronized");
+  })
+  .catch((error) => app.log.warn(error, "Unable to synchronize configured superusers"));
+
 await app.listen({ port: config.port, host: "0.0.0.0" });
+const metricsTimer = setInterval(() => {
+  void recordOperationalMetric({
+    connectedUsers: clients.size,
+    queuedUsers: matcher.size,
+    activeSessions: sessions.size
+  }).catch((error) => app.log.error(error, "Operational metric collection failed"));
+}, 30 * 1000);
+metricsTimer.unref();
 const retentionTimer = setInterval(() => {
   void purgeExpiredEvidence().catch((error) => app.log.error(error, "Evidence retention failed"));
 }, 24 * 60 * 60 * 1000);

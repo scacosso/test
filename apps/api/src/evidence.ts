@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 import { decodeEvidenceKey } from "./evidence-key.js";
@@ -81,4 +81,23 @@ export async function readEncryptedEvidence(evidenceId: string, actorId: string)
     body: plaintext,
     contentType: item.media_type === "image" ? "image/jpeg" : "application/json"
   };
+}
+
+export async function healthEvidenceStore() {
+  if (!s3) return { healthy: false, configured: false, latencyMs: null };
+  const startedAt = performance.now();
+  try {
+    await s3.send(new HeadBucketCommand({ Bucket: config.s3Bucket }));
+    return {
+      healthy: true,
+      configured: true,
+      latencyMs: Math.round(performance.now() - startedAt)
+    };
+  } catch {
+    return {
+      healthy: false,
+      configured: true,
+      latencyMs: Math.round(performance.now() - startedAt)
+    };
+  }
 }

@@ -25,5 +25,6 @@ export const config = {
   evidenceEncryptionKey: process.env.EVIDENCE_ENCRYPTION_KEY,
   moderationServiceToken: process.env.MODERATION_SERVICE_TOKEN,
   demoMode: process.env.DEMO_MODE !== "false",
-  maxConcurrentUsers: Number(process.env.MAX_CONCURRENT_USERS ?? 100)
+  maxConcurrentUsers: Number(process.env.MAX_CONCURRENT_USERS ?? 100),
+  superuserEmails: toList(process.env.SUPERUSER_EMAILS, []).map((email) => email.toLowerCase())
 };

@@ -100,4 +100,10 @@ export class RedisMatchmaker extends Matchmaker {
   override async release(userId: string) {
     await this.redis.del(`nexocam:active:${userId}`);
   }
+
+  async health() {
+    const startedAt = performance.now();
+    const response = await this.redis.ping();
+    return { healthy: response === "PONG", latencyMs: Math.round(performance.now() - startedAt) };
+  }
 }

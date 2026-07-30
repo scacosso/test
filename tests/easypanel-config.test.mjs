@@ -38,6 +38,7 @@ test("generates every environment value required by Compose", () => {
   for (const key of new Set(requiredKeys)) assert.ok(environment[key], `${key} must be generated`);
   assert.equal(environment.APP_URL, "https://app.nexocam.test");
   assert.equal(environment.LIVEKIT_PUBLIC_URL, "wss://livekit.nexocam.test");
+  assert.ok(Object.hasOwn(environment, "SUPERUSER_EMAILS"));
 });
 
 test("refuses to generate deploy secrets with placeholder domains", () => {

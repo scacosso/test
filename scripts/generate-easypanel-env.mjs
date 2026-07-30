@@ -22,6 +22,7 @@ const values = {
   POSTGRES_PASSWORD: hex(24),
   REDIS_PASSWORD: hex(24),
   BETTER_AUTH_SECRET: base64Key(),
+  SUPERUSER_EMAILS: "",
   LIVEKIT_API_KEY: `nexocam_${hex(8)}`,
   LIVEKIT_API_SECRET: hex(32),
   S3_REGION: "us-east-1",

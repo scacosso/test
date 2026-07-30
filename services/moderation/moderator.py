@@ -77,6 +77,7 @@ class Runtime:
         self.classifier.warmup()
         self.evidence = EvidenceStore()
         self.inference = asyncio.Semaphore(MAX_CONCURRENT_INFERENCE)
+        self.inflight = 0
 
 
 class Moderator:
@@ -139,6 +140,7 @@ class Moderator:
     async def classify(self, identity: str, sample: Sample) -> None:
         async with self.runtime.inference:
             INFLIGHT.inc()
+            self.runtime.inflight += 1
             try:
                 prediction = await asyncio.to_thread(self.runtime.classifier.classify, sample.image)
                 sample.score = float(prediction.nsfw)
@@ -147,6 +149,7 @@ class Moderator:
                 if sample.score >= WARNING_THRESHOLD:
                     await self.incident(identity, sample.score)
             finally:
+                self.runtime.inflight = max(0, self.runtime.inflight - 1)
                 INFLIGHT.dec()
 
     async def incident(self, identity: str, score: float) -> None:
@@ -188,13 +191,16 @@ async def main() -> None:
     for name in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(name, stop.set)
     endpoint = f"{os.environ['API_INTERNAL_URL'].rstrip('/')}/api/internal/moderation/sessions"
+    heartbeat_endpoint = f"{os.environ['API_INTERNAL_URL'].rstrip('/')}/api/internal/moderation/heartbeat"
     headers = {"Authorization": f"Bearer {os.environ['MODERATION_SERVICE_TOKEN']}"}
+    last_success = time.monotonic()
     try:
         while not stop.is_set():
             try:
                 async with http.get(endpoint, headers=headers) as response:
                     response.raise_for_status()
                     active = {item["sessionId"]: item for item in await response.json()}
+                last_success = time.monotonic()
                 for session_id, item in active.items():
                     if session_id not in monitors:
                         monitor = Moderator(session_id, item["roomName"], runtime, http)
@@ -202,6 +208,17 @@ async def main() -> None:
                         monitors[session_id] = monitor
                 for session_id in set(monitors) - set(active):
                     await monitors.pop(session_id).close()
+                async with http.post(
+                    heartbeat_endpoint,
+                    headers=headers,
+                    json={
+                        "status": "healthy",
+                        "activeSessions": len(monitors),
+                        "inflight": runtime.inflight,
+                        "lagSeconds": max(0, time.monotonic() - last_success),
+                    },
+                ) as response:
+                    response.raise_for_status()
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 print(f"moderation control loop unavailable: {error}", flush=True)
             try:

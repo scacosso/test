@@ -34,7 +34,8 @@ import {
   useRef,
   useState
 } from "react";
-import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AdminConsole } from "./admin";
 import { connectLiveKitSession, disconnectLiveKitSession } from "./livekit-session";
 
 type Locale = "es" | "en";
@@ -379,6 +380,11 @@ async function hasActiveSession() {
 function AuthPage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
+  const routeLocation = useLocation();
+  const requestedNext = useMemo(() => {
+    const next = new URLSearchParams(routeLocation.search).get("next");
+    return next?.startsWith("/admin") ? next : "/chat";
+  }, [routeLocation.search]);
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [authError, setAuthError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -390,13 +396,13 @@ function AuthPage() {
     let active = true;
     void hasActiveSession()
       .then((signedIn) => {
-        if (active && signedIn) navigate("/chat", { replace: true });
+        if (active && signedIn) navigate(requestedNext, { replace: true });
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [navigate]);
+  }, [navigate, requestedNext]);
 
   useEffect(() => {
     if (!publicConfig.features.registration && mode === "signup") setMode("signin");
@@ -428,7 +434,7 @@ function AuthPage() {
       if (mode === "signup" && publicConfig.features.emailVerification) {
         setVerificationPending(true);
       } else {
-        navigate("/chat");
+        navigate(requestedNext);
       }
     } catch {
       setAuthError(locale === "es"
@@ -458,7 +464,7 @@ function AuthPage() {
           : "Guest access is not available right now.");
         return;
       }
-      navigate("/chat");
+      navigate(requestedNext);
     } catch {
       setAuthError(locale === "es"
         ? "No pudimos comunicarnos con el servidor. Inténtalo de nuevo."
@@ -473,7 +479,7 @@ function AuthPage() {
       method: "POST",
       credentials: "include",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "google", callbackURL: `${location.origin}/chat` })
+      body: JSON.stringify({ provider: "google", callbackURL: `${location.origin}${requestedNext}` })
     });
     const data = await response.json() as { url?: string };
     if (data.url) location.href = data.url;
@@ -1007,46 +1013,6 @@ function LegalPage({ type }: { type: keyof typeof legalContent }) {
   );
 }
 
-function AdminReports() {
-  const [selected, setSelected] = useState(0);
-  const reports = [
-    { id: "NC-0421", reason: "Posible menor", risk: "Urgente", time: "Hace 3 min", evidence: 3 },
-    { id: "NC-0420", reason: "Acoso", risk: "Alto", time: "Hace 12 min", evidence: 2 },
-    { id: "NC-0419", reason: "Spam", risk: "Medio", time: "Hace 28 min", evidence: 0 }
-  ];
-  const report = reports[selected];
-  return (
-    <main className="admin-shell">
-      <aside className="admin-nav"><Logo compact /><nav><a className="active"><Flag />Reportes</a><a><UserCircle />Usuarios</a><a><ShieldCheck />Sanciones</a></nav><small>Moderador · turno activo</small></aside>
-      <section className="admin-main">
-        <header><div><span>Moderación</span><h1>Incidentes recientes</h1></div><button className="avatar"><UserCircle weight="fill" /></button></header>
-        <div className="admin-grid">
-          <div className="report-list">
-            <div className="report-filters"><button className="active">Pendientes 3</button><button>Revisados</button></div>
-            {reports.map((item, index) => (
-              <button className={selected === index ? "selected" : ""} onClick={() => setSelected(index)} key={item.id}>
-                <span className={`risk risk--${item.risk.toLowerCase()}`}>{item.risk}</span>
-                <strong>{item.reason}</strong><small>{item.id} · {item.time}</small>
-                <em>{item.evidence} evidencias</em>
-              </button>
-            ))}
-          </div>
-          <article className="report-detail">
-            <header><div><span>{report.id}</span><h2>{report.reason}</h2></div><span className="risk">{report.risk}</span></header>
-            <div className="evidence-grid">
-              {[0, 1, 2].map((item) => <div key={item}>{item < report.evidence ? <img src="/assets/remote-participant.png" alt={`Evidence ${item + 1}`} /> : <span>Sin captura</span>}</div>)}
-            </div>
-            <div className="audit-note"><LockKey weight="fill" /><p><strong>Acceso registrado</strong>Las evidencias están cifradas y se eliminarán automáticamente a los 30 días.</p></div>
-            <h3>Últimos mensajes</h3>
-            <div className="message-log"><p><b>Reportado</b> Hola, ¿cuántos años tienes?</p><p><b>Reportante</b> Prefiero terminar la conversación.</p></div>
-            <div className="moderation-actions"><button>Descartar</button><button>Retención 24 h</button><button className="danger">Suspender cuenta</button></div>
-          </article>
-        </div>
-      </section>
-    </main>
-  );
-}
-
 function Footer() {
   const { t } = useI18n();
   return (
@@ -1078,7 +1044,7 @@ export default function App() {
         <Route path="/safety" element={<LegalPage type="safety" />} />
         <Route path="/terms" element={<LegalPage type="terms" />} />
         <Route path="/privacy" element={<LegalPage type="privacy" />} />
-        <Route path="/admin/reports" element={<AdminReports />} />
+        <Route path="/admin/*" element={<AdminConsole locale={locale} setLocale={context.setLocale} />} />
         <Route path="*" element={<Landing />} />
       </Routes>
     </I18nContext.Provider>

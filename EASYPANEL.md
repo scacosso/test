@@ -21,7 +21,9 @@ LiveKit as one EasyPanel Compose service.
    - root path: `/`
    - compose file: `docker-compose.easypanel.yml`
 4. Paste the generated values into the Compose service environment. `SMTP_URL`
-   and `EMAIL_FROM` are optional while email verification is disabled.
+   and `EMAIL_FROM` are optional while email verification is disabled. Set
+   `SUPERUSER_EMAILS` to the email address that will own the console (multiple
+   addresses are comma-separated).
 5. Add two domains:
    - the app domain routes to service `app`, port `3001`;
    - the LiveKit domain routes to service `livekit`, port `7880`.
@@ -124,6 +126,7 @@ PORT=3001
 APP_URL=https://<generated-app-domain>
 ALLOWED_ORIGINS=https://<generated-app-domain>
 DEMO_MODE=false
+SUPERUSER_EMAILS=owner@your-domain.com
 DATABASE_URL=postgresql://...
 REDIS_URL=redis://redis:6379/0
 LIVEKIT_URL=wss://<generated-livekit-domain>
@@ -145,10 +148,11 @@ The LiveKit API key and secret must exactly match the `keys` entry in its config
 Google sign-in remains hidden until `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are present. Add the Better Auth callback URL shown by the provider under the generated app domain. Email verification is disabled by the default `email_verification` feature flag; configure SMTP before a future superuser enables it.
 
 Feature flags are stored in PostgreSQL for `registration`, `guest_access`,
-`email_verification`, `reporting`, `moderation`, and `monitoring`. Authenticated
-`admin` and `superuser` roles can read or update them through
-`GET/PATCH /api/admin/features`. The visual superuser control panel is planned
-for a later phase.
+`email_verification`, `reporting`, `moderation`, and `monitoring`. Only a
+`superuser` can change them through `/admin`; every change requires a reason and
+is written to `audit_log`. Accounts listed in `SUPERUSER_EMAILS` are promoted
+idempotently at startup or after email registration/sign-in. Removing an email
+from the variable does not demote the account automatically.
 
 ## 4. Startup and health checks
 
