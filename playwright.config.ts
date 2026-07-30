@@ -14,11 +14,18 @@ export default defineConfig({
       ]
     }
   },
-  webServer: {
-    command: "npm run dev -- --port 4173 --strictPort",
-    port: 4173,
-    reuseExistingServer: true
-  },
+  webServer: [
+    {
+      command: "npm run dev -- --port 4173 --strictPort",
+      port: 4173,
+      reuseExistingServer: true
+    },
+    {
+      command: "node --import tsx apps/api/src/server.ts",
+      port: 3001,
+      reuseExistingServer: true
+    }
+  ],
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
     { name: "mobile", use: { ...devices["iPhone 13"] } }

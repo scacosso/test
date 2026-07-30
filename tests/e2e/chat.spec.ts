@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+test("adult guest enters chat without email verification", async ({ page }) => {
+  await page.goto("/auth");
+  await expect(page.getByText(/revisa tu correo|check your email/i)).toHaveCount(0);
+  await page.getByRole("button", { name: /continuar como invitado|continue as guest/i }).click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.getByRole("button", { name: /permitir acceso|allow access/i })).toBeVisible();
+});
+
 test("explicit visual demo exposes the chat safety controls", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: /empezar a conversar|start a conversation/i }).click();

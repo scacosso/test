@@ -85,7 +85,7 @@ export const copy = {
     },
     auth: {
       title: "Tu próxima conversación empieza aquí",
-      subtitle: "Crea una cuenta verificada para entrar a NexoCam.",
+      subtitle: "Crea una cuenta o continúa como invitado para entrar a NexoCam.",
       name: "Nombre visible",
       email: "Correo electrónico",
       password: "Contraseña",
@@ -94,7 +94,7 @@ export const copy = {
       create: "Crear cuenta",
       google: "Continuar con Google",
       account: "¿Ya tienes cuenta?",
-      verify: "Te enviamos un enlace. Verifica tu correo antes de comenzar.",
+      verify: "La verificación de correo está desactivada durante esta alpha.",
       signIn: "Ingresar"
     },
     chat: {
@@ -153,7 +153,7 @@ export const copy = {
     },
     auth: {
       title: "Your next conversation starts here",
-      subtitle: "Create a verified account to enter NexoCam.",
+      subtitle: "Create an account or continue as a guest to enter NexoCam.",
       name: "Display name",
       email: "Email",
       password: "Password",
@@ -162,7 +162,7 @@ export const copy = {
       create: "Create account",
       google: "Continue with Google",
       account: "Already have an account?",
-      verify: "We sent you a link. Verify your email before you start.",
+      verify: "Email verification is disabled during this alpha.",
       signIn: "Sign in"
     },
     chat: {
@@ -314,20 +314,72 @@ function Landing() {
   );
 }
 
+type PublicFeatures = {
+  emailVerification: boolean;
+  guestAccess: boolean;
+  moderation: boolean;
+  monitoring: boolean;
+  registration: boolean;
+  reporting: boolean;
+};
+
+type PublicConfig = {
+  googleOAuth: boolean;
+  features: PublicFeatures;
+};
+
+const defaultPublicConfig: PublicConfig = {
+  googleOAuth: false,
+  features: {
+    emailVerification: false,
+    guestAccess: true,
+    moderation: true,
+    monitoring: true,
+    registration: true,
+    reporting: true
+  }
+};
+
+function usePublicConfig() {
+  const [publicConfig, setPublicConfig] = useState(defaultPublicConfig);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/config")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Config unavailable")))
+      .then((data: PublicConfig) => {
+        if (active) setPublicConfig({
+          googleOAuth: Boolean(data.googleOAuth),
+          features: { ...defaultPublicConfig.features, ...data.features }
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+  return publicConfig;
+}
+
+const adultBirthDateMax = (() => {
+  const date = new Date();
+  date.setUTCFullYear(date.getUTCFullYear() - 18);
+  return date.toISOString().slice(0, 10);
+})();
+
 function AuthPage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
-  const [submitted, setSubmitted] = useState(false);
   const [mode, setMode] = useState<"signup" | "signin">("signup");
-  const [googleEnabled, setGoogleEnabled] = useState(false);
   const [authError, setAuthError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [guestSubmitting, setGuestSubmitting] = useState(false);
+  const [verificationPending, setVerificationPending] = useState(false);
+  const publicConfig = usePublicConfig();
+
   useEffect(() => {
-    fetch("/api/config")
-      .then((response) => response.json())
-      .then((data) => setGoogleEnabled(Boolean(data.googleOAuth)))
-      .catch(() => setGoogleEnabled(false));
-  }, []);
+    if (!publicConfig.features.registration && mode === "signup") setMode("signin");
+  }, [mode, publicConfig.features.registration]);
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAuthError("");
@@ -346,12 +398,15 @@ function AuthPage() {
       });
       if (!response.ok) {
         setAuthError(locale === "es"
-          ? "No pudimos completar el acceso. Comprueba tus datos y que el correo esté verificado."
-          : "We couldn't complete sign-in. Check your details and make sure your email is verified.");
+          ? "No pudimos completar el acceso. Comprueba los datos e inténtalo nuevamente."
+          : "We couldn't complete sign-in. Check your details and try again.");
         return;
       }
-      if (mode === "signup") setSubmitted(true);
-      else navigate("/chat");
+      if (mode === "signup" && publicConfig.features.emailVerification) {
+        setVerificationPending(true);
+      } else {
+        navigate("/chat");
+      }
     } catch {
       setAuthError(locale === "es"
         ? "No pudimos comunicarnos con el servidor. Inténtalo de nuevo."
@@ -360,6 +415,35 @@ function AuthPage() {
       setSubmitting(false);
     }
   };
+
+  const guestSignIn = async () => {
+    setAuthError("");
+    setGuestSubmitting(true);
+    try {
+      const response = await fetch("/api/auth/sign-in/anonymous", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-nexocam-age-confirmed": "true"
+        },
+        body: "{}"
+      });
+      if (!response.ok) {
+        setAuthError(locale === "es"
+          ? "El acceso como invitado no está disponible en este momento."
+          : "Guest access is not available right now.");
+        return;
+      }
+      navigate("/chat");
+    } catch {
+      setAuthError(locale === "es"
+        ? "No pudimos comunicarnos con el servidor. Inténtalo de nuevo."
+        : "We couldn't reach the server. Please try again.");
+    } finally {
+      setGuestSubmitting(false);
+    }
+  };
+
   const googleSignIn = async () => {
     const response = await fetch("/api/auth/sign-in/social", {
       method: "POST",
@@ -382,38 +466,53 @@ function AuthPage() {
       </div>
       <section className="auth-card">
         <div className="auth-card__top"><LanguageButton /><Link to="/"><X /></Link></div>
-        {submitted ? (
+        {verificationPending ? (
           <div className="verification">
             <span><Check weight="bold" /></span>
             <h2>{locale === "es" ? "Revisa tu correo" : "Check your email"}</h2>
-            <p>{t.auth.verify}</p>
-            <button
-              className="button button--primary"
-              onClick={() => {
-                setSubmitted(false);
-                setMode("signin");
-              }}
-            >
-              {locale === "es" ? "Ya verifiqué mi correo" : "I verified my email"}
+            <p>{locale === "es" ? "Enviamos un enlace para activar tu cuenta." : "We sent a link to activate your account."}</p>
+            <button className="button button--primary" onClick={() => {
+              setVerificationPending(false);
+              setMode("signin");
+            }}>
+              {locale === "es" ? "Ir a ingresar" : "Go to sign in"}
             </button>
           </div>
         ) : (
           <>
-            <h2>{mode === "signup" ? t.auth.create : t.auth.signIn}</h2>
-            {googleEnabled && <button className="button button--google" type="button" onClick={googleSignIn}><strong>G</strong>{t.auth.google}</button>}
-            {googleEnabled && <div className="divider"><span>o con tu correo</span></div>}
-            <form onSubmit={submit}>
-              {mode === "signup" && <label>{t.auth.name}<input name="name" required autoComplete="name" placeholder="Alex" /></label>}
-              <label>{t.auth.email}<input name="email" required type="email" autoComplete="email" placeholder="alex@email.com" /></label>
-              <label>{t.auth.password}<input name="password" required type="password" minLength={8} autoComplete={mode === "signup" ? "new-password" : "current-password"} placeholder="8+ caracteres" /></label>
-              {mode === "signup" && <label>{t.auth.birth}<input name="birth" required type="date" max="2008-07-29" /></label>}
-              {mode === "signup" && <label className="checkbox"><input type="checkbox" required /><span>{t.auth.consent}</span></label>}
-              {authError && <p className="auth-error" role="alert">{authError}</p>}
-              <button className="button button--primary button--full" disabled={submitting}>
-                {submitting ? (locale === "es" ? "Procesando…" : "Working…") : mode === "signup" ? t.auth.create : t.auth.signIn}
-                {!submitting && <ArrowRight />}
-              </button>
-            </form>
+        <h2>{mode === "signup" ? t.auth.create : t.auth.signIn}</h2>
+        {publicConfig.features.guestAccess && (
+          <>
+            <button className="button button--guest" type="button" onClick={guestSignIn} disabled={guestSubmitting || submitting}>
+              <UserCircle weight="duotone" />
+              {guestSubmitting
+                ? (locale === "es" ? "Ingresando…" : "Joining…")
+                : (locale === "es" ? "Continuar como invitado" : "Continue as guest")}
+            </button>
+            <p className="guest-consent">
+              {locale === "es"
+                ? "Al continuar confirmas que tienes 18 años o más y aceptas las reglas de seguridad."
+                : "By continuing, you confirm you are 18 or older and accept the safety rules."}
+            </p>
+          </>
+        )}
+        {publicConfig.googleOAuth && <button className="button button--google" type="button" onClick={googleSignIn}><strong>G</strong>{t.auth.google}</button>}
+        {(publicConfig.features.guestAccess || publicConfig.googleOAuth) && (
+          <div className="divider"><span>{locale === "es" ? "o con tu correo" : "or with your email"}</span></div>
+        )}
+        <form onSubmit={submit}>
+          {mode === "signup" && <label>{t.auth.name}<input name="name" required autoComplete="name" placeholder="Alex" /></label>}
+          <label>{t.auth.email}<input name="email" required type="email" autoComplete="email" placeholder="alex@email.com" /></label>
+          <label>{t.auth.password}<input name="password" required type="password" minLength={8} autoComplete={mode === "signup" ? "new-password" : "current-password"} placeholder="8+ caracteres" /></label>
+          {mode === "signup" && <label>{t.auth.birth}<input name="birth" required type="date" max={adultBirthDateMax} /></label>}
+          {mode === "signup" && <label className="checkbox"><input type="checkbox" required /><span>{t.auth.consent}</span></label>}
+          {authError && <p className="auth-error" role="alert">{authError}</p>}
+          <button className="button button--primary button--full" disabled={submitting || guestSubmitting}>
+            {submitting ? (locale === "es" ? "Procesando…" : "Working…") : mode === "signup" ? t.auth.create : t.auth.signIn}
+            {!submitting && <ArrowRight />}
+          </button>
+        </form>
+        {publicConfig.features.registration && (
             <p className="auth-switch">
               {mode === "signup" ? t.auth.account : "¿Aún no tienes cuenta?"}
               <button onClick={() => {
@@ -423,6 +522,7 @@ function AuthPage() {
                 {mode === "signup" ? t.auth.signIn : t.auth.create}
               </button>
             </p>
+        )}
           </>
         )}
       </section>
@@ -455,6 +555,7 @@ function useCamera(enabled: boolean) {
 
 function ChatPage() {
   const { t, locale, setLocale } = useI18n();
+  const publicConfig = usePublicConfig();
   const visualDemo = new URLSearchParams(location.search).get("demo") === "connected";
   const [state, setState] = useState<ChatState>(visualDemo ? "connected" : "permission");
   const [messages, setMessages] = useState<{ mine: boolean; text: string; time?: string }[]>(
@@ -743,7 +844,13 @@ function ChatPage() {
             {state === "peer-left" && <StateCard icon={<SignOut />} title="La otra persona se desconectó" body="Puedes buscar una nueva conexión."><button className="button button--primary" onClick={next}>{t.chat.next}</button></StateCard>}
             {state === "reconnecting" && <StateCard icon={<SpinnerGap className="spin" />} title="Reconectando…" body="Conservamos tu lugar en la conversación." />}
             {state === "auth-required" && (
-              <StateCard icon={<LockKey />} title={locale === "es" ? "Debes iniciar sesión" : "Sign in required"} body={locale === "es" ? "Usa una cuenta con el correo verificado para entrar al videochat." : "Use an account with a verified email to enter video chat."}>
+              <StateCard
+                icon={<LockKey />}
+                title={locale === "es" ? "Debes iniciar sesión" : "Sign in required"}
+                body={publicConfig.features.emailVerification
+                  ? (locale === "es" ? "Verifica tu correo antes de entrar al videochat." : "Verify your email before entering video chat.")
+                  : (locale === "es" ? "Usa una cuenta o continúa como invitado para entrar al videochat." : "Use an account or continue as a guest to enter video chat.")}
+              >
                 <Link className="button button--primary" to="/auth">{t.auth.signIn}</Link>
               </StateCard>
             )}
@@ -768,7 +875,7 @@ function ChatPage() {
               {cameraOff ? <VideoCameraSlash weight="fill" /> : <VideoCamera weight="fill" />}<span>Cámara</span><CaretDown />
             </button>
             <button className="next-button" onClick={next} disabled={!["connected", "peer-left", "reported", "blocked"].includes(state)}><PaperPlaneTilt weight="duotone" />{t.chat.next}</button>
-            <button onClick={() => setReportOpen(true)} disabled={state !== "connected"}><Flag weight="fill" /><span>{t.chat.report}</span></button>
+            <button onClick={() => setReportOpen(true)} disabled={state !== "connected" || !publicConfig.features.reporting}><Flag weight="fill" /><span>{t.chat.report}</span></button>
             <button onClick={() => finishIncident("blocked")} disabled={state !== "connected"}><UserMinus weight="fill" /><span>{t.chat.block}</span></button>
           </div>
         </section>
@@ -779,7 +886,7 @@ function ChatPage() {
             <button className="chat-menu" aria-label="Chat menu" onClick={() => setChatActionsOpen((value) => !value)}>•••</button>
             {chatActionsOpen && (
               <div className="chat-actions">
-                <button onClick={() => { setChatActionsOpen(false); setReportOpen(true); }}><Flag />{t.chat.report}</button>
+                <button disabled={!publicConfig.features.reporting} onClick={() => { setChatActionsOpen(false); setReportOpen(true); }}><Flag />{t.chat.report}</button>
                 <button onClick={() => { setChatActionsOpen(false); finishIncident("blocked"); }}><LockKey />{t.chat.block}</button>
               </div>
             )}
@@ -810,7 +917,7 @@ function ChatPage() {
         </aside>
       </div>
 
-      {reportOpen && (
+      {reportOpen && publicConfig.features.reporting && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setReportOpen(false)}>
           <section className="modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onMouseDown={(event) => event.stopPropagation()}>
             <button className="modal__close" onClick={() => setReportOpen(false)}><X /></button>

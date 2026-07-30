@@ -20,9 +20,8 @@ LiveKit as one EasyPanel Compose service.
    - branch: `main`
    - root path: `/`
    - compose file: `docker-compose.easypanel.yml`
-4. Paste the generated values into the Compose service environment. Replace
-   `SMTP_URL` and `EMAIL_FROM` with a real transactional mail provider before
-   enabling public registration.
+4. Paste the generated values into the Compose service environment. `SMTP_URL`
+   and `EMAIL_FROM` are optional while email verification is disabled.
 5. Add two domains:
    - the app domain routes to service `app`, port `3001`;
    - the LiveKit domain routes to service `livekit`, port `7880`.
@@ -128,7 +127,13 @@ ONNX_THREADS=2
 
 The LiveKit API key and secret must exactly match the `keys` entry in its config. `EVIDENCE_ENCRYPTION_KEY` must decode to exactly 32 bytes; the generator emits an EasyPanel-safe, unpadded Base64url value. Store it outside MinIO and include it in encrypted backups; losing it makes evidence unrecoverable.
 
-Google sign-in remains hidden until `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are present. Add the Better Auth callback URL shown by the provider under the generated app domain. Configure SMTP to enable verification emails.
+Google sign-in remains hidden until `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are present. Add the Better Auth callback URL shown by the provider under the generated app domain. Email verification is disabled by the default `email_verification` feature flag; configure SMTP before a future superuser enables it.
+
+Feature flags are stored in PostgreSQL for `registration`, `guest_access`,
+`email_verification`, `reporting`, `moderation`, and `monitoring`. Authenticated
+`admin` and `superuser` roles can read or update them through
+`GET/PATCH /api/admin/features`. The visual superuser control panel is planned
+for a later phase.
 
 ## 4. Startup and health checks
 
@@ -168,9 +173,9 @@ Acceptance is WebRTC connection P95 below five seconds when a peer is available 
 ## 7. Launch checklist
 
 - Professional review of `/terms` and `/privacy`.
-- Google and SMTP credentials installed and email verification tested.
+- Guest access and unverified email registration tested; configure SMTP before enabling email verification.
 - Exact origin allowlist, secure cookies, and `DEMO_MODE=false`.
 - UDP firewall rules verified from an external network.
-- Two verified accounts complete a real call, text chat, next, report, and block flow.
+- Two distinct accounts or guest sessions complete a real call, text chat, next, report, and block flow.
 - Moderator evidence access audited; no evidence exists for normal sessions.
 - Backups and 30-day deletion verified.

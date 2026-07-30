@@ -6,10 +6,14 @@ create table if not exists profiles (
   date_of_birth date not null,
   country char(2),
   language char(2) not null default 'es',
-  role text not null default 'user' check (role in ('user', 'moderator', 'admin')),
+  role text not null default 'user' check (role in ('user', 'moderator', 'admin', 'superuser')),
   created_at timestamptz not null default now(),
   check (date_of_birth <= current_date - interval '18 years')
 );
+
+alter table profiles drop constraint if exists profiles_role_check;
+alter table profiles add constraint profiles_role_check
+  check (role in ('user', 'moderator', 'admin', 'superuser'));
 
 create table if not exists video_sessions (
   id uuid primary key,
@@ -108,3 +112,21 @@ create table if not exists audit_log (
   created_at timestamptz not null default now()
 );
 create index if not exists audit_log_target_idx on audit_log (target_type, target_id, created_at desc);
+
+create table if not exists feature_flags (
+  key text primary key check (key ~ '^[a-z][a-z0-9_]{2,63}$'),
+  enabled boolean not null,
+  description text not null default '',
+  updated_at timestamptz not null default now(),
+  updated_by text
+);
+
+insert into feature_flags (key, enabled, description)
+values
+  ('registration', true, 'Allow new email and password accounts'),
+  ('guest_access', true, 'Allow anonymous adult guest sessions'),
+  ('email_verification', false, 'Require registered users to verify their email'),
+  ('reporting', true, 'Allow users to report active sessions'),
+  ('moderation', true, 'Run automated moderation for active sessions'),
+  ('monitoring', true, 'Collect operational health and capacity metrics')
+on conflict (key) do nothing;

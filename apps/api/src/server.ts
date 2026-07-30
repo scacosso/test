@@ -8,16 +8,22 @@ import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { clientEventTypes, queueJoinSchema, reportSchema, wsEnvelopeSchema } from "@nexocam/shared";
+import { z } from "zod";
 import { auth, sessionUser } from "./auth.js";
+import { isAdultDateOfBirth } from "./auth-policy.js";
 import { config } from "./config.js";
 import {
   closeSession,
   createBlock,
   createReport,
   createSession,
+  featureFlagDefaults,
+  getFeatureFlags,
   isBlocked,
   isSanctioned,
-  pool
+  pool,
+  recordConsent,
+  updateFeatureFlags
 } from "./db.js";
 import { prepareRoom, terminateRoom } from "./livekit.js";
 import { Matchmaker } from "./matchmaker.js";
@@ -92,11 +98,22 @@ app.get("/health/ready", async (_request, reply) => {
     return reply.code(503).send({ status: "not-ready" });
   }
 });
-app.get("/api/config", async () => ({
-  googleOAuth: Boolean(config.googleClientId && config.googleClientSecret),
-  livekitUrl: config.livekitUrl,
-  maxConcurrentUsers: config.maxConcurrentUsers
-}));
+app.get("/api/config", async () => {
+  const features = await getFeatureFlags();
+  return {
+    googleOAuth: Boolean(config.googleClientId && config.googleClientSecret),
+    livekitUrl: config.livekitUrl,
+    maxConcurrentUsers: config.maxConcurrentUsers,
+    features: {
+      emailVerification: features.email_verification,
+      guestAccess: features.guest_access,
+      moderation: features.moderation,
+      monitoring: features.monitoring,
+      registration: features.registration,
+      reporting: features.reporting
+    }
+  };
+});
 
 const authHandler = auth;
 if (authHandler) {
@@ -106,6 +123,23 @@ if (authHandler) {
     config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
     handler: async (request, reply) => {
       const target = new URL(request.url, config.appUrl);
+      const features = await getFeatureFlags();
+      const isAnonymousSignIn = request.method === "POST" && target.pathname.endsWith("/sign-in/anonymous");
+      const isEmailSignUp = request.method === "POST" && target.pathname.endsWith("/sign-up/email");
+
+      if (isAnonymousSignIn && !features.guest_access) {
+        return reply.code(403).send({ error: "guest_access_disabled" });
+      }
+      if (isAnonymousSignIn && request.headers["x-nexocam-age-confirmed"] !== "true") {
+        return reply.code(400).send({ error: "adult_confirmation_required" });
+      }
+      if (isEmailSignUp && !features.registration) {
+        return reply.code(403).send({ error: "registration_disabled" });
+      }
+      if (isEmailSignUp && !isAdultDateOfBirth((request.body as { dateOfBirth?: unknown } | undefined)?.dateOfBirth)) {
+        return reply.code(400).send({ error: "adult_date_of_birth_required" });
+      }
+
       const body = request.method === "GET" ? undefined : JSON.stringify(request.body ?? {});
       const response = await authHandler.handler(new Request(target, {
         method: request.method,
@@ -114,16 +148,64 @@ if (authHandler) {
       }));
       reply.code(response.status);
       response.headers.forEach((value, key) => reply.header(key, value));
-      return reply.send(Buffer.from(await response.arrayBuffer()));
+      const responseBody = Buffer.from(await response.arrayBuffer());
+      if (response.ok && (isAnonymousSignIn || isEmailSignUp)) {
+        let data: { user?: { email?: string; id?: string } } | undefined;
+        try {
+          data = JSON.parse(responseBody.toString()) as { user?: { email?: string; id?: string } };
+        } catch {
+          app.log.warn("Better Auth response did not expose a user id for consent recording");
+        }
+        if (data?.user?.id) {
+          await recordConsent(data.user.id, "adult_18_attestation", "alpha-1");
+        }
+        if (isEmailSignUp && features.email_verification && data?.user?.email) {
+          void authHandler.api.sendVerificationEmail({
+            body: {
+              email: data.user.email,
+              callbackURL: `${config.appUrl}/auth`
+            },
+            headers: requestHeaders(request)
+          }).catch((error) => app.log.error(error, "Verification email failed"));
+        }
+      }
+      return reply.send(responseBody);
     }
   });
 } else {
-  app.post("/api/auth/sign-up/email", async (_request, reply) => reply.code(202).send({ demo: true, emailVerification: true }));
+  app.post("/api/auth/sign-up/email", async (_request, reply) => reply.code(202).send({ demo: true, emailVerification: false }));
+  app.post("/api/auth/sign-in/anonymous", async (request, reply) => {
+    if (request.headers["x-nexocam-age-confirmed"] !== "true") {
+      return reply.code(400).send({ error: "adult_confirmation_required" });
+    }
+    return reply.code(202).send({ demo: true, guest: true });
+  });
 }
+
+const featureFlagUpdateSchema = z.object(
+  Object.fromEntries(
+    Object.keys(featureFlagDefaults).map((key) => [key, z.boolean().optional()])
+  ) as Record<keyof typeof featureFlagDefaults, z.ZodOptional<z.ZodBoolean>>
+).partial().refine((value) => Object.keys(value).length > 0, "At least one feature flag is required");
+
+app.get("/api/admin/features", async (request, reply) => {
+  const user = await sessionUser(requestHeaders(request));
+  if (!user || !["admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  return { features: await getFeatureFlags() };
+});
+
+app.patch("/api/admin/features", async (request, reply) => {
+  if (!originAllowed(request)) return reply.code(403).send({ error: "origin_not_allowed" });
+  const user = await sessionUser(requestHeaders(request));
+  if (!user || !["admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  const parsed = featureFlagUpdateSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_feature_flags" });
+  return { features: await updateFeatureFlags(parsed.data, user.id) };
+});
 
 app.get("/api/admin/reports", async (request, reply) => {
   const user = await sessionUser(requestHeaders(request));
-  if (!user || !["moderator", "admin"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  if (!user || !["moderator", "admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
   if (!pool) return [];
   const result = await pool.query(
     `select r.id, r.reason, r.priority, r.status, r.created_at, count(e.id)::int as evidence_count
@@ -139,7 +221,7 @@ app.get("/api/admin/reports", async (request, reply) => {
 
 app.get("/api/admin/evidence/:id", async (request, reply) => {
   const user = await sessionUser(requestHeaders(request));
-  if (!user || !["moderator", "admin"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
+  if (!user || !["moderator", "admin", "superuser"].includes(user.role)) return reply.code(403).send({ error: "forbidden" });
   const id = (request.params as { id: string }).id;
   if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: "invalid_id" });
   const evidence = await readEncryptedEvidence(id, user.id);
@@ -152,6 +234,9 @@ app.get("/api/admin/evidence/:id", async (request, reply) => {
 app.post("/api/internal/moderation/event", async (request, reply) => {
   if (!internalAuthorized(request.headers.authorization)) {
     return reply.code(401).send({ error: "unauthorized" });
+  }
+  if (!(await getFeatureFlags()).moderation) {
+    return reply.code(503).send({ error: "moderation_disabled" });
   }
   const input = request.body as {
     sessionId?: string;
@@ -322,6 +407,10 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
         return;
       }
       if (message.type === "session.report") {
+        if (!(await getFeatureFlags()).reporting) {
+          send(client, "error", { code: "FEATURE_DISABLED", message: "Reporting is currently disabled." }, message.requestId);
+          return;
+        }
         const report = reportSchema.parse({ ...message.payload, sessionId: client.sessionId, reportedUserId: client.peerId });
         await createReport({
           reporterId: userId,

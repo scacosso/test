@@ -2,7 +2,7 @@
 
 NexoCam is an original, bilingual (Spanish/English), adults-only random video-chat alpha. It includes:
 
-- verified email/password accounts and optional Google OAuth through Better Auth;
+- email/password accounts, adult guest sessions, and optional Google OAuth through Better Auth;
 - country/language matchmaking with Redis-backed atomic claims;
 - private two-person LiveKit rooms, text chat, reconnect, next, report, and block;
 - incident-only encrypted evidence, 30-day deletion, and a moderator console;
@@ -53,7 +53,8 @@ The visual acceptance reference is [`design/reference-nexocam-option-1.png`](des
 
 ## Important alpha limits
 
-- Only people aged 18+ may register. This alpha records age declaration and date of birth; it does not perform document verification.
+- Only people aged 18+ may register or enter as guests. Registered accounts provide a date of birth; guests provide an explicit adult attestation. This alpha does not perform document verification.
 - Google OAuth and real email delivery are enabled only when credentials are configured.
+- Email verification is disabled for the current alpha. Registration, guest access, verification, reporting, moderation, and monitoring are stored as feature flags for a future superuser panel.
 - A generated EasyPanel domain supports WSS plus ICE/TCP and ICE/UDP, but not TURN/TLS on port 443. Some restrictive networks will need a future custom domain and TURN/TLS configuration.
 - Legal copy is a technical draft and requires professional review before public launch.

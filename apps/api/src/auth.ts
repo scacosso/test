@@ -1,7 +1,8 @@
 import { betterAuth } from "better-auth";
+import { anonymous } from "better-auth/plugins";
 import nodemailer from "nodemailer";
 import { config } from "./config.js";
-import { pool } from "./db.js";
+import { getFeatureFlags, pool } from "./db.js";
 
 const transporter = config.smtpUrl ? nodemailer.createTransport(config.smtpUrl) : null;
 const socialProviders = config.googleClientId && config.googleClientSecret
@@ -16,11 +17,11 @@ export const auth = pool
       trustedOrigins: config.allowedOrigins,
       emailAndPassword: {
         enabled: true,
-        requireEmailVerification: true,
+        requireEmailVerification: false,
         minPasswordLength: 8
       },
       emailVerification: {
-        sendOnSignUp: true,
+        sendOnSignUp: false,
         sendVerificationEmail: async ({ user, url }) => {
           if (!transporter) {
             console.info(`[email-preview] Verify ${user.email}: ${url}`);
@@ -37,10 +38,16 @@ export const auth = pool
       socialProviders,
       user: {
         additionalFields: {
-          dateOfBirth: { type: "date", required: true, input: true },
+          dateOfBirth: { type: "date", required: false, input: true },
           role: { type: "string", required: false, defaultValue: "user", input: false }
         }
       },
+      plugins: [
+        anonymous({
+          emailDomainName: "guest.nexocam.invalid",
+          generateName: () => "Invitado"
+        })
+      ],
       session: {
         expiresIn: 60 * 60 * 24 * 7,
         updateAge: 60 * 60 * 24
@@ -59,10 +66,15 @@ export const auth = pool
 export async function sessionUser(headers: Headers) {
   if (!auth) return null;
   const session = await auth.api.getSession({ headers });
-  if (!session?.user.emailVerified) return null;
+  if (!session) return null;
+  const flags = await getFeatureFlags();
+  const isGuest = Boolean((session.user as unknown as { isAnonymous?: boolean }).isAnonymous);
+  if (isGuest && !flags.guest_access) return null;
+  if (!isGuest && flags.email_verification && !session.user.emailVerified) return null;
   return {
     id: session.user.id,
     email: session.user.email,
-    role: ((session.user as unknown as { role?: string }).role ?? "user") as "user" | "moderator" | "admin"
+    isGuest,
+    role: ((session.user as unknown as { role?: string }).role ?? "user") as "user" | "moderator" | "admin" | "superuser"
   };
 }
