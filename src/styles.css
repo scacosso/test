@@ -187,7 +187,7 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .video-tools { position: absolute; z-index: 3; top: 22px; left: 26px; display: flex; gap: 9px; }
 .video-tools button { width: 44px; height: 44px; display: grid; place-items: center; color: white; border: 0; border-radius: 50%; background: rgba(8, 31, 40, .72); font-size: 22px; }
 .participant-label { position: absolute; z-index: 2; left: 18px; bottom: 17px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; color: white; background: rgba(7,31,42,.55); backdrop-filter: blur(8px); font-size: 11px; }
-.self-video { position: absolute; z-index: 4; right: 20px; bottom: 130px; width: 200px; height: 195px; display: grid; place-items: center; overflow: hidden; color: white; background: #28424a; border: 3px solid white; border-radius: 18px; box-shadow: 0 12px 30px rgba(7,31,42,.22); }
+.self-video { position: absolute; z-index: 4; right: 20px; bottom: 130px; width: 200px; height: 195px; display: grid; place-items: center; overflow: hidden; color: white; background: #28424a; border: 3px solid white; border-radius: 18px; box-shadow: 0 12px 30px rgba(7,31,42,.22); pointer-events: none; user-select: none; }
 .self-video img, .self-video video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .self-video span { position: absolute; left: 8px; bottom: 7px; padding: 4px 7px; border-radius: 6px; background: rgba(7,31,42,.58); font-size: 9px; }
 .stage-controls { padding: 0 28px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e5e9e8; }

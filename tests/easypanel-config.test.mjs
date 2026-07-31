@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const compose = readFileSync("docker-compose.easypanel.yml", "utf8");
+const guestAuthMigration = readFileSync("apps/api/migrations/004_guest_auth.sql", "utf8");
 const generated = execFileSync(
   process.execPath,
   ["scripts/generate-easypanel-env.mjs", "app.nexocam.test", "livekit.nexocam.test"],
@@ -56,4 +57,11 @@ test("generates correctly sized encryption and URL-safe infrastructure secrets",
   for (const key of ["POSTGRES_PASSWORD", "REDIS_PASSWORD", "LIVEKIT_API_SECRET", "S3_SECRET_KEY"]) {
     assert.match(environment[key], /^[a-f0-9]+$/);
   }
+});
+
+test("keeps the Better Auth user schema compatible with guest accounts", () => {
+  assert.match(guestAuthMigration, /alter column "dateOfBirth" drop not null/i);
+  assert.match(guestAuthMigration, /set "isAnonymous" = false/i);
+  assert.match(guestAuthMigration, /alter column "isAnonymous" set default false/i);
+  assert.match(guestAuthMigration, /alter column "isAnonymous" set not null/i);
 });
