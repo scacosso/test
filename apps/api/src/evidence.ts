@@ -18,8 +18,32 @@ function keyMaterial() {
   return decodeEvidenceKey(config.evidenceEncryptionKey);
 }
 
-export async function storeEncryptedChat(
-  eventId: string,
+export function decryptEvidencePayload(
+  encrypted: Buffer,
+  key: Buffer,
+  mediaType: "image" | "chat",
+  sessionId: string
+) {
+  if (encrypted.length < 29) throw new Error("Encrypted evidence is too short.");
+  const nonce = encrypted.subarray(0, 12);
+  const decrypt = (tag: Buffer, ciphertext: Buffer) => {
+    const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+    decipher.setAuthTag(tag);
+    if (mediaType === "image") decipher.setAAD(Buffer.from(sessionId));
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  };
+  try {
+    return decrypt(encrypted.subarray(12, 28), encrypted.subarray(28));
+  } catch (error) {
+    if (mediaType !== "image") throw error;
+    // Compatibility with captures written by the original Python worker,
+    // which appended the GCM tag after the ciphertext.
+    return decrypt(encrypted.subarray(-16), encrypted.subarray(12, -16));
+  }
+}
+
+async function storeEncryptedChat(
+  owner: { reportId: string } | { eventId: string },
   sessionId: string,
   messages: { userId: string; text: string; at: string }[]
 ) {
@@ -38,11 +62,29 @@ export async function storeEncryptedChat(
     ContentType: "application/octet-stream",
     Metadata: { retention: "30-days", encryption: "aes-256-gcm" }
   }));
+  const ownerColumn = "reportId" in owner ? "report_id" : "moderation_event_id";
+  const ownerId = "reportId" in owner ? owner.reportId : owner.eventId;
   await pool.query(
-    `insert into evidence (moderation_event_id, object_key, media_type, sha256, encrypted_key)
+    `insert into evidence (${ownerColumn}, object_key, media_type, sha256, encrypted_key)
      values ($1, $2, 'chat', $3, 'env:EVIDENCE_ENCRYPTION_KEY')`,
-    [eventId, objectKey, createHash("sha256").update(body).digest("hex")]
+    [ownerId, objectKey, createHash("sha256").update(body).digest("hex")]
   );
+}
+
+export async function storeEncryptedChatForEvent(
+  eventId: string,
+  sessionId: string,
+  messages: { userId: string; text: string; at: string }[]
+) {
+  await storeEncryptedChat({ eventId }, sessionId, messages);
+}
+
+export async function storeEncryptedChatForReport(
+  reportId: string,
+  sessionId: string,
+  messages: { userId: string; text: string; at: string }[]
+) {
+  await storeEncryptedChat({ reportId }, sessionId, messages);
 }
 
 export async function readEncryptedEvidence(evidenceId: string, actorId: string) {
@@ -65,13 +107,7 @@ export async function readEncryptedEvidence(evidenceId: string, actorId: string)
   const object = await s3.send(new GetObjectCommand({ Bucket: config.s3Bucket, Key: item.object_key }));
   if (!object.Body) return null;
   const encrypted = Buffer.from(await object.Body.transformToByteArray());
-  const nonce = encrypted.subarray(0, 12);
-  const tag = encrypted.subarray(12, 28);
-  const ciphertext = encrypted.subarray(28);
-  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
-  decipher.setAuthTag(tag);
-  if (item.media_type === "image") decipher.setAAD(Buffer.from(item.session_id));
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const plaintext = decryptEvidencePayload(encrypted, key, item.media_type, item.session_id);
   await pool.query(
     `insert into audit_log (actor_id, action, target_type, target_id)
      values ($1, 'evidence.view', 'evidence', $2)`,

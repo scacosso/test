@@ -606,6 +606,8 @@ function ChatPage() {
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState("");
   const [chatActionsOpen, setChatActionsOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -623,6 +625,7 @@ function ChatPage() {
   const roomRef = useRef<import("livekit-client").Room | null>(null);
   const connectionGenerationRef = useRef(0);
   const closingSocketRef = useRef(false);
+  const pendingIncidentRef = useRef<{ requestId: string; kind: "reported" | "blocked" } | null>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const inviteRef = useRef<HTMLDivElement>(null);
 
@@ -664,8 +667,11 @@ function ChatPage() {
   const sendEnvelope = (type: string, payload: Record<string, unknown> = {}) => {
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type, requestId: crypto.randomUUID(), payload, version: 1 }));
+      const requestId = crypto.randomUUID();
+      socket.send(JSON.stringify({ type, requestId, payload, version: 1 }));
+      return requestId;
     }
+    return null;
   };
 
   const clearRemoteMedia = () => {
@@ -797,8 +803,32 @@ function ChatPage() {
           await disconnectRoom();
           setState("peer-left");
         }
+        if (message.type === "session.ended") {
+          const pending = pendingIncidentRef.current;
+          if (!pending || !message.requestId || message.requestId === pending.requestId) {
+            await disconnectRoom();
+            pendingIncidentRef.current = null;
+            setReportSubmitting(false);
+            setReportError("");
+            setReportOpen(false);
+            setState(message.payload.reason === "reported" ? "reported" : message.payload.reason === "blocked" ? "blocked" : "peer-left");
+          }
+        }
         if (message.type === "account.sanctioned") setState("suspended");
-        if (message.type === "error") setState("connection-error");
+        if (message.type === "error") {
+          const pending = pendingIncidentRef.current;
+          if (pending && (!message.requestId || message.requestId === pending.requestId)) {
+            pendingIncidentRef.current = null;
+            setReportSubmitting(false);
+            if (pending.kind === "reported") {
+              setReportError(locale === "es"
+                ? "No pudimos guardar el reporte. Inténtalo nuevamente."
+                : "We couldn't save the report. Please try again.");
+            }
+          } else {
+            setState("connection-error");
+          }
+        }
       });
       socket.addEventListener("error", () => undefined);
       socket.addEventListener("close", (event) => {
@@ -869,13 +899,27 @@ function ChatPage() {
   };
 
   const finishIncident = (kind: "reported" | "blocked", reason?: string) => {
-    sendEnvelope(kind === "reported" ? "session.report" : "session.block", {
-      sessionId: "00000000-0000-4000-8000-000000000001",
-      reportedUserId: "00000000-0000-4000-8000-000000000002",
-      reason
-    });
-    setReportOpen(false);
-    setState(kind);
+    if (visualDemo) {
+      setReportOpen(false);
+      setState(kind);
+      return;
+    }
+    const requestId = sendEnvelope(kind === "reported" ? "session.report" : "session.block", { reason });
+    if (!requestId) {
+      if (kind === "reported") {
+        setReportError(locale === "es"
+          ? "La conexión se interrumpió. Vuelve a intentarlo."
+          : "The connection was interrupted. Please try again.");
+      } else {
+        setState("connection-error");
+      }
+      return;
+    }
+    pendingIncidentRef.current = { requestId, kind };
+    if (kind === "reported") {
+      setReportSubmitting(true);
+      setReportError("");
+    }
   };
 
   const copyInviteLink = async () => {
@@ -1141,9 +1185,9 @@ function ChatPage() {
       </div>
 
       {reportOpen && publicConfig.features.reporting && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setReportOpen(false)}>
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!reportSubmitting) setReportOpen(false); }}>
           <section className="modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onMouseDown={(event) => event.stopPropagation()}>
-            <button className="modal__close" onClick={() => setReportOpen(false)}><X /></button>
+            <button className="modal__close" disabled={reportSubmitting} onClick={() => setReportOpen(false)}><X /></button>
             <span className="modal__icon"><Flag weight="fill" /></span>
             <h2 id="report-title">{t.chat.reason}</h2>
             <p>El reporte finaliza esta conversación y puede conservar evidencia del incidente por 30 días.</p>
@@ -1154,8 +1198,9 @@ function ChatPage() {
                 ["violence", "Violencia"],
                 ["spam", "Spam o estafa"],
                 ["possible_minor", "Posible menor de edad"]
-              ].map(([value, label]) => <button key={value} onClick={() => finishIncident("reported", value)}>{label}<ArrowRight /></button>)}
+              ].map(([value, label]) => <button key={value} disabled={reportSubmitting} onClick={() => finishIncident("reported", value)}>{label}{reportSubmitting ? <SpinnerGap className="spin" /> : <ArrowRight />}</button>)}
             </div>
+            {reportError ? <p className="auth-error" role="alert">{reportError}</p> : null}
           </section>
         </div>
       )}

@@ -1018,22 +1018,42 @@ function ReportsPage({ locale }: { locale: AdminLocale }) {
   const [data, setData] = useState<{ items: ReportItem[]; total: number } | null>(null);
   const [selected, setSelected] = useState<ReportItem | null>(null);
   const [error, setError] = useState(false);
-  const selectedId = selected?.id;
+  const [updatedAt, setUpdatedAt] = useState("");
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = selected?.id ?? null;
+  }, [selected?.id]);
   const load = useCallback(async () => {
     try {
       const result = await adminRequest<{ items: ReportItem[]; total: number }>(`/api/admin/reports?limit=100&status=${status}`);
       setData(result);
       setError(false);
+      setUpdatedAt(new Date().toISOString());
+      const selectedId = selectedIdRef.current;
       if (selectedId) {
         const refreshed = result.items.find((item) => item.id === selectedId);
-        if (!refreshed) setSelected(null);
+        if (!refreshed) {
+          setSelected(null);
+        } else {
+          try {
+            setSelected(await adminRequest<ReportItem>(`/api/admin/reports/${selectedId}`));
+          } catch {
+            setSelected(refreshed);
+          }
+        }
       }
     } catch {
       setError(true);
     }
-  }, [selectedId, status]);
+  }, [status]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
 
   const select = async (item: ReportItem) => {
     setSelected(item);
@@ -1048,7 +1068,7 @@ function ReportsPage({ locale }: { locale: AdminLocale }) {
     <div className="reports-layout">
       <section className="admin-panel report-queue">
         <header>
-          <div><h2>{t.reports.queue}</h2><p>{data?.total ?? 0}</p></div>
+          <div><h2>{t.reports.queue}</h2><p>{data?.total ?? 0}{updatedAt ? ` · ${t.common.updated} ${relativeTime(updatedAt, locale)}` : ""}</p></div>
           <select value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); }}>
             <option value="pending">{locale === "es" ? "Pendientes" : "Pending"}</option>
             <option value="reviewing">{locale === "es" ? "En revisión" : "Reviewing"}</option>

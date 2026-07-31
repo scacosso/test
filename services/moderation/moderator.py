@@ -56,7 +56,8 @@ class EvidenceStore:
         output = io.BytesIO()
         sample.image.save(output, format="JPEG", quality=82, optimize=True)
         nonce = os.urandom(12)
-        encrypted = nonce + self.cipher.encrypt(nonce, output.getvalue(), session_id.encode())
+        sealed = self.cipher.encrypt(nonce, output.getvalue(), session_id.encode())
+        encrypted = nonce + sealed[-16:] + sealed[:-16]
         object_key = f"incidents/{session_id}/{uuid.uuid4()}.jpg.enc"
         self.client.put_object(
             Bucket=self.bucket,
@@ -87,6 +88,7 @@ class Moderator:
         self.runtime = runtime
         self.http = http
         self.windows: dict[str, deque[Sample]] = defaultdict(lambda: deque(maxlen=5))
+        self.processed_report_ids: set[str] = set()
         self.room = rtc.Room()
         self.room.on("track_subscribed", self.on_track_subscribed)
 
@@ -177,6 +179,29 @@ class Moderator:
         ) as response:
             response.raise_for_status()
 
+    async def capture_report(self, identity: str, report_id: str) -> None:
+        if report_id in self.processed_report_ids:
+            return
+        samples = sorted(
+            self.windows[identity],
+            key=lambda item: item.captured_at,
+            reverse=True,
+        )[:3]
+        evidence = await asyncio.gather(
+            *(asyncio.to_thread(self.runtime.evidence.put, self.session_id, item) for item in samples)
+        )
+        async with self.http.post(
+            f"{os.environ['API_INTERNAL_URL'].rstrip('/')}/api/internal/moderation/report-evidence",
+            headers={"Authorization": f"Bearer {os.environ['MODERATION_SERVICE_TOKEN']}"},
+            json={
+                "reportId": report_id,
+                "sessionId": self.session_id,
+                "evidence": evidence,
+            },
+        ) as response:
+            response.raise_for_status()
+        self.processed_report_ids.add(report_id)
+
     async def close(self) -> None:
         await self.room.disconnect()
 
@@ -206,6 +231,12 @@ async def main() -> None:
                         monitor = Moderator(session_id, item["roomName"], runtime, http)
                         await monitor.start()
                         monitors[session_id] = monitor
+                    evidence_request = item.get("evidenceRequest")
+                    if evidence_request:
+                        await monitors[session_id].capture_report(
+                            evidence_request["userId"],
+                            evidence_request["reportId"],
+                        )
                 for session_id in set(monitors) - set(active):
                     await monitors.pop(session_id).close()
                 async with http.post(
@@ -221,6 +252,8 @@ async def main() -> None:
                     response.raise_for_status()
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 print(f"moderation control loop unavailable: {error}", flush=True)
+            except Exception as error:
+                print(f"moderation control loop failed: {error}", flush=True)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=3)
             except asyncio.TimeoutError:

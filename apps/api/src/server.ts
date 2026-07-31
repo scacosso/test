@@ -51,7 +51,12 @@ import {
 } from "./db.js";
 import { healthLiveKit, prepareRoom, terminateRoom } from "./livekit.js";
 import { Matchmaker, type Match } from "./matchmaker.js";
-import { healthEvidenceStore, readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
+import {
+  healthEvidenceStore,
+  readEncryptedEvidence,
+  storeEncryptedChatForEvent,
+  storeEncryptedChatForReport
+} from "./evidence.js";
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
 import { consumeWsTicket, createWsTicket, websocketTicketFromProtocols } from "./ws-ticket.js";
@@ -71,6 +76,13 @@ type Client = {
   queue?: { userId: string; socketId: string; language: string; country: string; joinedAt: number };
 };
 type ActiveSession = { id: string; roomName: string; users: [string, string]; messages: { userId: string; text: string; at: string }[] };
+type PendingReportEvidence = {
+  reportId: string;
+  sessionId: string;
+  roomName: string;
+  reportedUserId: string;
+  expiresAt: number;
+};
 
 const app = Fastify({
   logger: { level: config.nodeEnv === "production" ? "info" : "debug" },
@@ -80,6 +92,7 @@ const app = Fastify({
 const clients = new Map<string, Client>();
 const users = new Map<string, Client>();
 const sessions = new Map<string, ActiveSession>();
+const pendingReportEvidence = new Map<string, PendingReportEvidence>();
 const matcher = config.redisUrl
   ? new RedisMatchmaker(config.redisUrl, isBlocked, isSanctioned)
   : new Matchmaker(isBlocked, isSanctioned);
@@ -273,6 +286,14 @@ const reportActionSchema = z.object({
   action: z.enum(["start_review", "resolve", "dismiss", "temporary_hold"]),
   reason: z.string().trim().min(3).max(500),
   durationHours: z.coerce.number().int().min(1).max(24).optional()
+});
+const reportEvidenceSchema = z.object({
+  reportId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  evidence: z.array(z.object({
+    objectKey: z.string().min(1).max(512),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/)
+  })).max(3)
 });
 const sanctionCreateSchema = z.object({
   userId: z.string().min(1).max(128),
@@ -614,7 +635,7 @@ app.post("/api/internal/moderation/event", async (request, reply) => {
       );
     }
   }
-  await storeEncryptedChat(eventId, session.id, session.messages);
+  await storeEncryptedChatForEvent(eventId, session.id, session.messages);
   if (input.strong) {
     if (pool) {
       await pool.query(
@@ -632,14 +653,72 @@ app.post("/api/internal/moderation/event", async (request, reply) => {
   return reply.code(202).send({ eventId });
 });
 
+app.post("/api/internal/moderation/report-evidence", async (request, reply) => {
+  if (!internalAuthorized(request.headers.authorization)) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+  const parsed = reportEvidenceSchema.safeParse(request.body);
+  if (!parsed.success || !pool) {
+    return reply.code(parsed.success ? 503 : 400).send({
+      error: parsed.success ? "database_unavailable" : "invalid_report_evidence"
+    });
+  }
+  const input = parsed.data;
+  const pending = pendingReportEvidence.get(input.sessionId);
+  if (!pending || pending.reportId !== input.reportId || pending.expiresAt <= Date.now()) {
+    pendingReportEvidence.delete(input.sessionId);
+    return reply.code(404).send({ error: "evidence_request_not_found" });
+  }
+  const report = await pool.query(
+    `select id from reports where id = $1 and session_id = $2 and reported_id = $3`,
+    [input.reportId, input.sessionId, pending.reportedUserId]
+  );
+  if (!report.rowCount) return reply.code(404).send({ error: "report_not_found" });
+  for (const item of input.evidence) {
+    if (!item.objectKey.startsWith(`incidents/${input.sessionId}/`)) {
+      return reply.code(400).send({ error: "invalid_evidence_object" });
+    }
+    await pool.query(
+      `insert into evidence (report_id, object_key, media_type, sha256, encrypted_key)
+       values ($1, $2, 'image', $3, 'env:EVIDENCE_ENCRYPTION_KEY')
+       on conflict (object_key) do nothing`,
+      [input.reportId, item.objectKey, item.sha256]
+    );
+  }
+  await pool.query(
+    `insert into audit_log (action, target_type, target_id, metadata)
+     values ('evidence.capture', 'report', $1, $2::jsonb)`,
+    [input.reportId, JSON.stringify({ source: "moderation", images: input.evidence.length })]
+  );
+  pendingReportEvidence.delete(input.sessionId);
+  return reply.code(202).send({ accepted: true, images: input.evidence.length });
+});
+
 app.get("/api/internal/moderation/sessions", async (request, reply) => {
   if (!internalAuthorized(request.headers.authorization)) {
     return reply.code(401).send({ error: "unauthorized" });
   }
-  return [...sessions.values()].map((session) => ({
-    sessionId: session.id,
-    roomName: session.roomName
-  }));
+  const active = new Map(
+    [...sessions.values()].map((session) => [session.id, {
+      sessionId: session.id,
+      roomName: session.roomName,
+      evidenceRequest: undefined as { reportId: string; userId: string } | undefined
+    }])
+  );
+  for (const [sessionId, pending] of pendingReportEvidence) {
+    if (pending.expiresAt <= Date.now()) {
+      pendingReportEvidence.delete(sessionId);
+      continue;
+    }
+    const item = active.get(sessionId) ?? {
+      sessionId,
+      roomName: pending.roomName,
+      evidenceRequest: undefined
+    };
+    item.evidenceRequest = { reportId: pending.reportId, userId: pending.reportedUserId };
+    active.set(sessionId, item);
+  }
+  return [...active.values()];
 });
 
 async function matchFound(left: Client, right: Client) {
@@ -780,8 +859,10 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
   users.set(userId, client);
 
   clientSocket.on("message", async (raw: Buffer | string) => {
+    let requestId: string | undefined;
     try {
       const message = wsEnvelopeSchema.parse(JSON.parse(raw.toString()));
+      requestId = message.requestId;
       if (!clientEventTypes.includes(message.type as (typeof clientEventTypes)[number])) throw new Error("Unknown event");
       if (message.type === "heartbeat") {
         if (client.queue && !client.sessionId) {
@@ -834,18 +915,36 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
         return;
       }
       if (message.type === "session.report") {
-        if (!(await getFeatureFlags()).reporting) {
+        const features = await getFeatureFlags();
+        if (!features.reporting) {
           send(client, "error", { code: "FEATURE_DISABLED", message: "Reporting is currently disabled." }, message.requestId);
           return;
         }
         const report = reportSchema.parse({ ...message.payload, sessionId: client.sessionId, reportedUserId: client.peerId });
-        await createReport({
+        const session = sessions.get(report.sessionId);
+        const reportId = await createReport({
           reporterId: userId,
           reportedId: report.reportedUserId,
           sessionId: report.sessionId,
           reason: report.reason,
           details: report.details
         });
+        if (session) {
+          try {
+            await storeEncryptedChatForReport(reportId, session.id, session.messages);
+          } catch (error) {
+            app.log.error({ err: error, reportId, sessionId: session.id }, "Unable to retain report chat evidence");
+          }
+          if (features.moderation) {
+            pendingReportEvidence.set(session.id, {
+              reportId,
+              sessionId: session.id,
+              roomName: session.roomName,
+              reportedUserId: report.reportedUserId,
+              expiresAt: Date.now() + 20_000
+            });
+          }
+        }
         if (report.reason === "possible_minor" && client.peerId && pool) {
           await pool.query(
             `insert into sanctions (user_id, type, reason, automatic, expires_at)
@@ -854,11 +953,15 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
           );
         }
         await endSession(client, `reported:${report.reason}`);
-        send(client, "session.ended", { reason: "reported" }, message.requestId);
+        send(client, "session.ended", {
+          reason: "reported",
+          reportId,
+          evidenceStatus: features.moderation ? "capturing" : "chat-only"
+        }, message.requestId);
       }
     } catch (error) {
       app.log.warn({ err: error, userId }, "WebSocket message failed");
-      send(client, "error", { code: "INVALID_MESSAGE", message: "The message could not be processed." });
+      send(client, "error", { code: "INVALID_MESSAGE", message: "The message could not be processed." }, requestId);
     }
   });
 
