@@ -5,6 +5,20 @@ const roomService = config.livekitApiKey && config.livekitApiSecret
   ? new RoomServiceClient(config.livekitInternalUrl.replace(/^ws/, "http"), config.livekitApiKey, config.livekitApiSecret)
   : null;
 
+export type LiveReviewMode = "observe" | "connect";
+
+export function liveReviewGrant(mode: LiveReviewMode, roomName: string) {
+  const interactive = mode === "connect";
+  return {
+    room: roomName,
+    roomJoin: true,
+    canPublish: interactive,
+    canSubscribe: true,
+    canPublishData: interactive,
+    hidden: !interactive
+  };
+}
+
 export async function prepareRoom(roomName: string, identities: string[]) {
   if (!config.livekitApiKey || !config.livekitApiSecret) {
     return identities.map((identity) => ({ identity, token: `demo-${identity}` }));
@@ -26,24 +40,22 @@ export async function prepareRoom(roomName: string, identities: string[]) {
   }));
 }
 
-export async function createLiveReviewToken(roomName: string, identity: string) {
+export async function createLiveReviewToken(
+  roomName: string,
+  identity: string,
+  mode: LiveReviewMode,
+  targetUserId: string
+) {
   if (!config.livekitApiKey || !config.livekitApiSecret) {
     throw new Error("LiveKit credentials are required for live review.");
   }
   const token = new AccessToken(config.livekitApiKey, config.livekitApiSecret, {
     identity,
-    name: "NexoCam safety review",
-    metadata: JSON.stringify({ service: "live-review" }),
-    ttl: "90s"
+    name: mode === "connect" ? "NexoCam super admin" : "NexoCam safety review",
+    metadata: JSON.stringify({ service: "live-review", mode, targetUserId }),
+    ttl: mode === "connect" ? "5m" : "90s"
   });
-  token.addGrant({
-    room: roomName,
-    roomJoin: true,
-    canPublish: false,
-    canSubscribe: true,
-    canPublishData: false,
-    hidden: true
-  });
+  token.addGrant(liveReviewGrant(mode, roomName));
   return token.toJwt();
 }
 

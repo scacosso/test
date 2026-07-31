@@ -578,22 +578,34 @@
 .live-room-card__pulse { display: inline-flex; align-items: center; gap: 6px; color: #147551; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .live-room-card__pulse i { width: 7px; height: 7px; border-radius: 50%; background: #2abc7a; box-shadow: 0 0 0 4px #e5f7ed; }
 .live-room-card__video {
-  min-height: 118px;
+  min-height: 142px;
   margin: 12px 0;
-  display: grid;
-  place-items: center;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   position: relative;
-  color: #73cfc3;
+  overflow: hidden;
+  color: #d9efed;
   border-radius: 7px;
-  background: linear-gradient(145deg, #07303d, #0d4752);
+  background:
+    radial-gradient(circle at 82% 18%, rgba(85, 213, 194, .24), transparent 32%),
+    linear-gradient(145deg, #07303d, #0d4752);
 }
-.live-room-card__video svg { font-size: 35px; }
-.live-room-card__video strong { position: absolute; right: 9px; bottom: 8px; color: #fff; font-size: 9px; }
+.live-user-card__avatar { width: 52px; height: 52px; flex: 0 0 auto; display: grid; place-items: center; color: #84d8ce; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; background: rgba(2, 24, 32, .35); }
+.live-user-card__avatar svg { font-size: 43px; }
+.live-room-card__video > div { min-width: 0; display: grid; gap: 5px; }
+.live-room-card__video > div strong { overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.live-room-card__video > div small { overflow: hidden; color: #97babd; text-overflow: ellipsis; white-space: nowrap; font-size: 7px; }
+.live-user-card__camera { position: absolute; right: 9px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; color: #bdeae4; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+.live-user-card__camera svg { font-size: 13px; }
 .live-room-card dl { margin: 0 0 13px; display: grid; gap: 8px; }
 .live-room-card dl div { min-width: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
 .live-room-card dt { color: #7d8e92; font-size: 8px; }
 .live-room-card dd { margin: 0; overflow: hidden; color: var(--admin-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; text-align: right; }
-.live-room-card > .admin-button { width: 100%; }
+.live-user-card__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.live-user-card__actions .admin-button { min-width: 0; width: 100%; padding-inline: 10px; }
 
 .admin-modal-backdrop,
 .live-review-overlay {
@@ -661,6 +673,16 @@
 .live-review-video { min-width: 0; min-height: 0; position: relative; overflow: hidden; border-radius: 9px; background: #0a303b; }
 .live-review-video video { width: 100%; height: 100%; display: block; object-fit: contain; background: #031921; }
 .live-review-video span { max-width: calc(100% - 20px); padding: 5px 8px; position: absolute; left: 10px; bottom: 10px; overflow: hidden; color: #fff; border-radius: 5px; background: rgba(2, 20, 27, .76); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.live-review-local { width: min(240px, 32vw); position: absolute; z-index: 4; right: 24px; bottom: 24px; display: grid; gap: 8px; }
+.live-review-local__video { aspect-ratio: 4 / 3; position: relative; overflow: hidden; display: grid; place-items: center; color: #78b9b2; border: 2px solid rgba(255,255,255,.9); border-radius: 10px; background: #0b3540; box-shadow: 0 16px 40px rgba(0,0,0,.34); }
+.live-review-local__video video { width: 100%; height: 100%; display: block; object-fit: cover; transform: scaleX(-1); }
+.live-review-local__video > svg { font-size: 32px; }
+.live-review-local__video > span { position: absolute; left: 8px; bottom: 8px; padding: 4px 6px; color: #fff; border-radius: 4px; background: rgba(2, 20, 27, .72); font-size: 8px; }
+.live-review-local__controls { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.live-review-local__controls button { min-width: 0; height: 34px; padding: 0 9px; display: flex; align-items: center; justify-content: center; gap: 6px; color: #e1f3f1; border: 1px solid rgba(255,255,255,.2); border-radius: 7px; background: rgba(7, 49, 60, .94); font: 700 8px/1 "Inter", sans-serif; }
+.live-review-local__controls button.is-muted { color: #ffd8d1; border-color: rgba(255,122,102,.35); background: rgba(87, 42, 42, .92); }
+.live-review-local__controls svg { font-size: 15px; }
+.live-review-local > p { margin: 0; padding: 7px 8px; color: #ffd8d1; border-radius: 6px; background: rgba(107, 39, 39, .78); font-size: 8px; line-height: 1.4; }
 
 .admin-detail { padding: 17px; }
 .admin-detail > header { padding-bottom: 16px; display: flex; align-items: center; gap: 11px; border-bottom: 1px solid var(--admin-line); }
@@ -983,4 +1005,9 @@
   .live-review-overlay > header .admin-button svg { font-size: 18px; }
   .live-review-grid { padding: 7px; grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 7px; }
   .live-review-video span { left: 7px; bottom: 7px; }
+  .live-review-grid.is-single { grid-template-rows: minmax(0, 1fr); }
+  .live-review-local { width: 122px; right: 12px; bottom: 12px; }
+  .live-review-local__controls button { padding: 0; }
+  .live-review-local__controls button span { display: none; }
+  .live-review-local__controls svg { font-size: 17px; }
 }

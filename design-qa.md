@@ -83,6 +83,36 @@ final result: passed
 
 ---
 
+# Super Admin connected-user live controls QA
+
+## Comparison target
+
+- Source visual truth: `design/reference-superadmin-option-3.png`
+- Implementation: `/admin/live`
+- Viewports: 1440 x 1024 and 390 x 844
+- State: authenticated superuser, two active rooms, four connected users, individual preview action, and bidirectional connection action
+
+## Browser evidence
+
+- Each active participant is represented by an individual card instead of a room-level aggregate.
+- `Vista previa` opens only the selected participant stream with a hidden, subscribe-only, 90-second LiveKit token.
+- `Conectar` joins the active room as a visible superuser participant, publishes camera and microphone, exposes local mute controls, and expires after five minutes.
+- Both actions require a reason and record start and end events in the administrative audit log.
+- Desktop and mobile render without horizontal overflow; mobile cards and actions stack without clipping.
+- Browser console errors: none.
+
+## Intentional behavior
+
+`Conectar` joins the selected user's active LiveKit room. If the room already has a peer, both existing participants can receive the visible superuser stream; it does not move the selected user into a separate private room.
+
+## Findings
+
+No actionable P0, P1, or P2 visual or interaction findings remain.
+
+final result: passed
+
+---
+
 # Super Admin live-room review QA
 
 ## Acceptance surfaces

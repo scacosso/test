@@ -318,7 +318,9 @@ const sanctionRevokeSchema = z.object({
   reason: z.string().trim().min(3).max(500)
 });
 const liveReviewStartSchema = z.object({
-  reason: z.string().trim().min(3).max(500)
+  reason: z.string().trim().min(3).max(500),
+  mode: z.enum(["observe", "connect"]).default("observe"),
+  targetUserId: z.string().trim().min(1).max(128)
 });
 const liveReviewEndSchema = z.object({
   endReason: z.enum(["viewer_closed", "viewer_disconnected", "token_expired"]).default("viewer_closed")
@@ -637,14 +639,22 @@ app.post("/api/admin/live/rooms/:id/reviews", {
   if (!features.moderation) return reply.code(503).send({ error: "moderation_disabled" });
   const session = sessions.get(sessionId);
   if (!session) return reply.code(404).send({ error: "room_not_active" });
+  if (!session.users.includes(parsed.data.targetUserId)) {
+    return reply.code(404).send({ error: "target_not_in_room" });
+  }
   if (!pool) return reply.code(503).send({ error: "database_unavailable" });
 
   const reviewId = randomUUID();
-  const participantIdentity = `live-review-${reviewId}`;
-  const expiresAt = new Date(Date.now() + 90_000);
+  const participantIdentity = `${parsed.data.mode === "connect" ? "live-connect" : "live-review"}-${reviewId}`;
+  const expiresAt = new Date(Date.now() + (parsed.data.mode === "connect" ? 5 * 60_000 : 90_000));
   let token: string;
   try {
-    token = await createLiveReviewToken(session.roomName, participantIdentity);
+    token = await createLiveReviewToken(
+      session.roomName,
+      participantIdentity,
+      parsed.data.mode,
+      parsed.data.targetUserId
+    );
   } catch (error) {
     request.log.error(error, "Unable to create live-review token");
     return reply.code(503).send({ error: "livekit_unavailable" });
@@ -654,18 +664,35 @@ app.post("/api/admin/live/rooms/:id/reviews", {
     await client.query("begin");
     await client.query(
       `insert into live_reviews (
-         id, actor_id, session_id, room_name, participant_identity, reason, token_expires_at
-       ) values ($1, $2, $3, $4, $5, $6, $7)`,
-      [reviewId, user.id, session.id, session.roomName, participantIdentity, parsed.data.reason, expiresAt]
+         id, actor_id, session_id, room_name, participant_identity, reason, token_expires_at, mode, target_user_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        reviewId,
+        user.id,
+        session.id,
+        session.roomName,
+        participantIdentity,
+        parsed.data.reason,
+        expiresAt,
+        parsed.data.mode,
+        parsed.data.targetUserId
+      ]
     );
     await client.query(
       `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
-       values ($1, 'live_review.started', 'video_session', $2, $3, $4::jsonb)`,
+       values ($1, $2, 'video_session', $3, $4, $5::jsonb)`,
       [
         user.id,
+        parsed.data.mode === "connect" ? "live_connection.started" : "live_review.started",
         session.id,
         parsed.data.reason,
-        JSON.stringify({ reviewId, participantIdentity, tokenExpiresAt: expiresAt.toISOString() })
+        JSON.stringify({
+          reviewId,
+          participantIdentity,
+          mode: parsed.data.mode,
+          targetUserId: parsed.data.targetUserId,
+          tokenExpiresAt: expiresAt.toISOString()
+        })
       ]
     );
     await client.query("commit");
@@ -681,7 +708,9 @@ app.post("/api/admin/live/rooms/:id/reviews", {
     sessionId: session.id,
     token,
     livekitUrl: config.livekitUrl,
-    expiresAt: expiresAt.toISOString()
+    expiresAt: expiresAt.toISOString(),
+    mode: parsed.data.mode,
+    targetUserId: parsed.data.targetUserId
   };
 });
 
@@ -696,30 +725,44 @@ app.post("/api/admin/live/reviews/:id/end", async (request, reply) => {
   }
   if (!pool) return reply.code(503).send({ error: "database_unavailable" });
   const client = await pool.connect();
-  let ended: { room_name: string; participant_identity: string; session_id: string } | undefined;
+  let ended: {
+    room_name: string;
+    participant_identity: string;
+    session_id: string;
+    mode: "observe" | "connect";
+    target_user_id: string | null;
+  } | undefined;
   try {
     await client.query("begin");
     const result = await client.query<{
       room_name: string;
       participant_identity: string;
       session_id: string;
+      mode: "observe" | "connect";
+      target_user_id: string | null;
     }>(
       `update live_reviews
        set ended_at = now(), end_reason = $2
        where id = $1 and ended_at is null
-       returning room_name, participant_identity, session_id`,
+       returning room_name, participant_identity, session_id, mode, target_user_id`,
       [reviewId, parsed.data.endReason]
     );
     ended = result.rows[0];
     if (ended) {
       await client.query(
         `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
-         values ($1, 'live_review.ended', 'video_session', $2, $3, $4::jsonb)`,
+         values ($1, $2, 'video_session', $3, $4, $5::jsonb)`,
         [
           user.id,
+          ended.mode === "connect" ? "live_connection.ended" : "live_review.ended",
           ended.session_id,
           parsed.data.endReason,
-          JSON.stringify({ reviewId, participantIdentity: ended.participant_identity })
+          JSON.stringify({
+            reviewId,
+            participantIdentity: ended.participant_identity,
+            mode: ended.mode,
+            targetUserId: ended.target_user_id
+          })
         ]
       );
     }
@@ -987,19 +1030,29 @@ async function expireLiveReviews() {
     session_id: string;
     room_name: string;
     participant_identity: string;
+    mode: "observe" | "connect";
+    target_user_id: string | null;
   }>(
     `with ended as (
        update live_reviews
        set ended_at = now(), end_reason = 'token_expired'
        where ended_at is null and token_expires_at <= now()
-       returning id, actor_id, session_id, room_name, participant_identity
+       returning id, actor_id, session_id, room_name, participant_identity, mode, target_user_id
      ), audited as (
        insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
-       select actor_id, 'live_review.ended', 'video_session', session_id::text,
-              'token_expired', jsonb_build_object('reviewId', id, 'participantIdentity', participant_identity)
+       select actor_id,
+              case when mode = 'connect' then 'live_connection.ended' else 'live_review.ended' end,
+              'video_session', session_id::text,
+              'token_expired',
+              jsonb_build_object(
+                'reviewId', id,
+                'participantIdentity', participant_identity,
+                'mode', mode,
+                'targetUserId', target_user_id
+              )
        from ended
      )
-     select id, actor_id, session_id, room_name, participant_identity from ended`
+     select id, actor_id, session_id, room_name, participant_identity, mode, target_user_id from ended`
   );
   await Promise.all(expired.rows.map((review) =>
     removeLiveReviewParticipant(review.room_name, review.participant_identity)
@@ -1018,11 +1071,19 @@ async function endSession(client: Client, reason: string, notifyPeer = true) {
            update live_reviews
            set ended_at = now(), end_reason = 'room_ended'
            where session_id = $1 and ended_at is null
-           returning id, actor_id, session_id, room_name, participant_identity
+           returning id, actor_id, session_id, room_name, participant_identity, mode, target_user_id
          ), audited as (
            insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
-           select actor_id, 'live_review.ended', 'video_session', session_id::text,
-                  'room_ended', jsonb_build_object('reviewId', id, 'participantIdentity', participant_identity)
+           select actor_id,
+                  case when mode = 'connect' then 'live_connection.ended' else 'live_review.ended' end,
+                  'video_session', session_id::text,
+                  'room_ended',
+                  jsonb_build_object(
+                    'reviewId', id,
+                    'participantIdentity', participant_identity,
+                    'mode', mode,
+                    'targetUserId', target_user_id
+                  )
            from ended
          )
          select room_name, participant_identity from ended`,

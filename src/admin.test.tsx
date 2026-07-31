@@ -80,7 +80,7 @@ describe("super admin console", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/me", expect.any(Object)));
   });
 
-  it("lists active rooms and requires a justification before live review", async () => {
+  it("lists every active participant and offers preview or two-way connection", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/admin/me")) {
@@ -115,10 +115,17 @@ describe("super admin console", () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole("heading", { name: "Revisión de salas en vivo" })).toBeVisible();
-    expect(await screen.findByText("a@example.com · b@example.com")).toBeVisible();
-    screen.getByRole("button", { name: /Observar sala/ }).click();
+    expect(await screen.findByRole("heading", { name: "Usuarios conectados" })).toBeVisible();
+    expect(screen.getAllByText("a@example.com").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("b@example.com").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /Vista previa/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /Conectar/ })).toHaveLength(2);
+    screen.getAllByRole("button", { name: /Vista previa/ })[0].click();
     expect(await screen.findByRole("heading", { name: "Justificación de la revisión" })).toBeVisible();
     expect(screen.getByRole("button", { name: /Iniciar revisión/ })).toBeDisabled();
+    screen.getByText("Cancelar", { selector: "button.admin-button" }).click();
+    screen.getAllByRole("button", { name: /Conectar/ })[0].click();
+    expect(await screen.findByRole("heading", { name: "Justificación de la conexión" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Entrar a la sala/ })).toBeDisabled();
   });
 });

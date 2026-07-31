@@ -5,6 +5,7 @@ import test from "node:test";
 
 const compose = readFileSync("docker-compose.easypanel.yml", "utf8");
 const guestAuthMigration = readFileSync("apps/api/migrations/004_guest_auth.sql", "utf8");
+const liveReviewMigration = readFileSync("apps/api/migrations/005_live_review_modes.sql", "utf8");
 const generated = execFileSync(
   process.execPath,
   ["scripts/generate-easypanel-env.mjs", "app.nexocam.test", "livekit.nexocam.test"],
@@ -64,4 +65,10 @@ test("keeps the Better Auth user schema compatible with guest accounts", () => {
   assert.match(guestAuthMigration, /set "isAnonymous" = false/i);
   assert.match(guestAuthMigration, /alter column "isAnonymous" set default false/i);
   assert.match(guestAuthMigration, /alter column "isAnonymous" set not null/i);
+});
+
+test("persists live preview and interactive connection modes", () => {
+  assert.match(liveReviewMigration, /add column if not exists mode text not null default 'observe'/i);
+  assert.match(liveReviewMigration, /add column if not exists target_user_id text/i);
+  assert.match(liveReviewMigration, /check \(mode in \('observe', 'connect'\)\)/i);
 });

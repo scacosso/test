@@ -1,15 +1,24 @@
 import {
+  LocalVideoTrack,
   RemoteAudioTrack,
   RemoteVideoTrack,
   Room,
   RoomEvent,
   Track,
+  createLocalTracks,
+  type LocalTrack,
   type RemoteParticipant,
   type RemoteTrack,
   type RemoteTrackPublication
 } from "livekit-client";
 import { useEffect, useRef, useState } from "react";
-import { SpinnerGap, VideoCameraSlash } from "@phosphor-icons/react";
+import {
+  Microphone,
+  MicrophoneSlash,
+  SpinnerGap,
+  VideoCamera,
+  VideoCameraSlash
+} from "@phosphor-icons/react";
 
 type ReviewTrack = {
   key: string;
@@ -24,6 +33,8 @@ export type LiveReviewConnection = {
   token: string;
   livekitUrl: string;
   expiresAt: string;
+  mode: "observe" | "connect";
+  targetUserId: string;
 };
 
 function VideoTrack({ item }: { item: ReviewTrack }) {
@@ -53,14 +64,30 @@ function AudioTrack({ item }: { item: ReviewTrack }) {
   return <audio ref={ref} autoPlay />;
 }
 
+function LocalPreview({ track }: { track: LocalVideoTrack }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    track.attach(element);
+    return () => { track.detach(element); };
+  }, [track]);
+  return <video ref={ref} autoPlay muted playsInline />;
+}
+
 export default function AdminLiveReviewViewer(props: {
   connection: LiveReviewConnection;
   locale: "es" | "en";
   onEnded: (reason: "viewer_disconnected" | "token_expired") => void;
 }) {
   const [tracks, setTracks] = useState<ReviewTrack[]>([]);
+  const [localTracks, setLocalTracks] = useState<LocalTrack[]>([]);
+  const [microphoneMuted, setMicrophoneMuted] = useState(false);
+  const [cameraMuted, setCameraMuted] = useState(false);
+  const [mediaError, setMediaError] = useState(false);
   const [status, setStatus] = useState<"connecting" | "connected" | "reconnecting" | "error">("connecting");
   const endedRef = useRef(false);
+  const localTracksRef = useRef<LocalTrack[]>([]);
 
   useEffect(() => {
     const room = new Room({ adaptiveStream: true, dynacast: false });
@@ -95,9 +122,30 @@ export default function AdminLiveReviewViewer(props: {
       .on(RoomEvent.Reconnected, () => setStatus("connected"))
       .on(RoomEvent.Disconnected, disconnected);
 
-    void room.connect(props.connection.livekitUrl, props.connection.token, {
-      autoSubscribe: true
-    }).then(() => setStatus("connected")).catch(() => setStatus("error"));
+    void (async () => {
+      try {
+        await room.connect(props.connection.livekitUrl, props.connection.token, {
+          autoSubscribe: true
+        });
+        if (props.connection.mode === "connect") {
+          try {
+            const created = await createLocalTracks({ audio: true, video: true });
+            if (endedRef.current) {
+              created.forEach((track) => track.stop());
+              return;
+            }
+            await Promise.all(created.map((track) => room.localParticipant.publishTrack(track)));
+            localTracksRef.current = created;
+            setLocalTracks(created);
+          } catch {
+            setMediaError(true);
+          }
+        }
+        if (!endedRef.current) setStatus("connected");
+      } catch {
+        if (!endedRef.current) setStatus("error");
+      }
+    })();
 
     const remainingMs = Math.max(0, new Date(props.connection.expiresAt).getTime() - Date.now());
     const expiryTimer = window.setTimeout(() => {
@@ -109,29 +157,50 @@ export default function AdminLiveReviewViewer(props: {
     return () => {
       endedRef.current = true;
       window.clearTimeout(expiryTimer);
+      localTracksRef.current.forEach((track) => track.stop());
+      localTracksRef.current = [];
       room.removeAllListeners();
       void room.disconnect();
     };
   }, [props.connection, props.onEnded]);
 
-  const videos = tracks.filter((item) => item.kind === Track.Kind.Video);
-  const audios = tracks.filter((item) => item.kind === Track.Kind.Audio);
+  const toggleLocalTrack = async (kind: Track.Kind) => {
+    const track = localTracksRef.current.find((item) => item.kind === kind);
+    if (!track) return;
+    if (track.isMuted) await track.unmute();
+    else await track.mute();
+    if (kind === Track.Kind.Audio) setMicrophoneMuted(track.isMuted);
+    if (kind === Track.Kind.Video) setCameraMuted(track.isMuted);
+  };
+
+  const targetTracks = tracks.filter((item) => item.identity === props.connection.targetUserId);
+  const videos = targetTracks.filter((item) => item.kind === Track.Kind.Video);
+  const audios = targetTracks.filter((item) => item.kind === Track.Kind.Audio);
+  const localVideo = localTracks.find((item): item is LocalVideoTrack => item instanceof LocalVideoTrack);
   const copy = props.locale === "es"
     ? {
-        connecting: "Conectando a la sala…",
-        reconnecting: "Reconectando la revisión…",
+        connecting: props.connection.mode === "connect" ? "Entrando a la sala…" : "Abriendo vista previa…",
+        reconnecting: "Reconectando la transmisión…",
         error: "No se pudo abrir la transmisión.",
-        empty: "La sala está conectada, pero todavía no publica video."
+        empty: "El usuario está conectado, pero todavía no publica video.",
+        mediaError: "Entraste a la sala, pero no se pudo activar tu cámara o micrófono.",
+        microphone: "Micrófono",
+        camera: "Cámara",
+        you: "Tú · Superadmin"
       }
     : {
-        connecting: "Connecting to the room…",
-        reconnecting: "Reconnecting the review…",
+        connecting: props.connection.mode === "connect" ? "Joining the room…" : "Opening preview…",
+        reconnecting: "Reconnecting the stream…",
         error: "The stream could not be opened.",
-        empty: "The room is connected, but no video is being published yet."
+        empty: "The user is connected, but is not publishing video yet.",
+        mediaError: "You joined the room, but your camera or microphone could not be enabled.",
+        microphone: "Microphone",
+        camera: "Camera",
+        you: "You · Super admin"
       };
 
   return (
-    <div className="live-review-stage">
+    <div className={`live-review-stage live-review-stage--${props.connection.mode}`}>
       {audios.map((item) => <AudioTrack key={item.key} item={item} />)}
       {status === "connecting" || status === "reconnecting" ? (
         <div className="live-review-stage__state">
@@ -149,10 +218,40 @@ export default function AdminLiveReviewViewer(props: {
           <strong>{copy.empty}</strong>
         </div>
       ) : (
-        <div className={`live-review-grid${videos.length === 1 ? " is-single" : ""}`}>
+        <div className="live-review-grid is-single">
           {videos.map((item) => <VideoTrack key={item.key} item={item} />)}
         </div>
       )}
+
+      {props.connection.mode === "connect" ? (
+        <aside className="live-review-local">
+          <div className="live-review-local__video">
+            {localVideo && !cameraMuted ? <LocalPreview track={localVideo} /> : <VideoCameraSlash />}
+            <span>{copy.you}</span>
+          </div>
+          <div className="live-review-local__controls">
+            <button
+              type="button"
+              className={microphoneMuted ? "is-muted" : ""}
+              onClick={() => void toggleLocalTrack(Track.Kind.Audio)}
+              aria-label={copy.microphone}
+            >
+              {microphoneMuted ? <MicrophoneSlash /> : <Microphone />}
+              <span>{copy.microphone}</span>
+            </button>
+            <button
+              type="button"
+              className={cameraMuted ? "is-muted" : ""}
+              onClick={() => void toggleLocalTrack(Track.Kind.Video)}
+              aria-label={copy.camera}
+            >
+              {cameraMuted ? <VideoCameraSlash /> : <VideoCamera />}
+              <span>{copy.camera}</span>
+            </button>
+          </div>
+          {mediaError ? <p role="alert">{copy.mediaError}</p> : null}
+        </aside>
+      ) : null}
     </div>
   );
 }
