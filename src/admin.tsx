@@ -42,6 +42,7 @@ import {
   useLocation,
   useNavigate
 } from "react-router-dom";
+import { signOutBrowserSession } from "./auth-client";
 
 export type AdminLocale = "es" | "en";
 type Role = "user" | "moderator" | "admin" | "superuser";
@@ -1391,6 +1392,7 @@ function AdminShell(props: {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState(false);
   const section = location.pathname.split("/")[2] || "overview";
   const title = t.header[section as keyof typeof t.header] ?? t.header.overview;
   const availableNav = navItems.filter((item) => props.identity.permissions.includes(item.permission));
@@ -1406,8 +1408,13 @@ function AdminShell(props: {
   useEffect(() => setMobileOpen(false), [location.pathname]);
 
   const logout = async () => {
-    await fetch("/api/auth/sign-out", { method: "POST", credentials: "include" }).catch(() => undefined);
-    navigate("/auth", { replace: true });
+    setLogoutError(false);
+    try {
+      await signOutBrowserSession();
+      navigate("/auth", { replace: true });
+    } catch {
+      setLogoutError(true);
+    }
   };
 
   return (
@@ -1419,6 +1426,7 @@ function AdminShell(props: {
         </div>
         <nav>{availableNav.map(({ key, to, icon: Icon, ...item }) => <NavLink key={key} to={to} end={"end" in item ? item.end : false}><Icon /><span>{t.nav[key]}</span></NavLink>)}</nav>
         <div className="superadmin-sidebar__access"><ShieldCheck /><div><strong>{t.header.superadmin}</strong><span>{props.identity.user.role}</span></div></div>
+        {logoutError && <p className="sidebar-logout-error" role="alert">{props.locale === "es" ? "No se pudo cerrar la sesión." : "Sign out failed."}</p>}
         <button className="sidebar-logout" onClick={() => void logout()}><SignOut />{t.common.logout}</button>
       </aside>
       {mobileOpen ? <button className="sidebar-backdrop" aria-label={t.common.cancel} onClick={() => setMobileOpen(false)} /> : null}

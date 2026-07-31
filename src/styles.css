@@ -171,7 +171,9 @@ h1, h2, h3, .logo { font-family: "Manrope", sans-serif; }
 .account-menu__identity span { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .account-menu > a, .account-menu > button { min-height: 42px; padding: 0 11px; display: flex; align-items: center; gap: 10px; color: var(--ink); border: 0; border-radius: 9px; background: white; font-size: 12px; text-align: left; text-decoration: none; }
 .account-menu > a:hover, .account-menu > button:hover { background: #f2f6f5; }
+.account-menu > button:disabled { opacity: .6; cursor: wait; }
 .account-menu > a svg, .account-menu > button svg { color: var(--teal-dark); font-size: 18px; }
+.account-menu__error { margin: 5px 8px 3px; color: #b33b2f; font-size: 10px; line-height: 1.4; }
 .chat-workspace { height: calc(100vh - 94px); min-height: 590px; display: grid; grid-template-columns: minmax(0, 1fr) 34%; }
 .stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) 112px; position: relative; background: white; }
 .remote-video { min-height: 0; overflow: hidden; position: relative; background: #102830; border-radius: 29px 0 0 0; }

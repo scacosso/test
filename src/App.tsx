@@ -37,6 +37,7 @@ import {
 } from "react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AdminConsole } from "./admin";
+import { getBrowserSession, hasActiveSession, signOutBrowserSession } from "./auth-client";
 import { connectLiveKitSession, disconnectLiveKitSession } from "./livekit-session";
 
 type Locale = "es" | "en";
@@ -376,16 +377,6 @@ const adultBirthDateMax = (() => {
   return date.toISOString().slice(0, 10);
 })();
 
-async function hasActiveSession() {
-  const response = await fetch("/api/auth/get-session", {
-    credentials: "include",
-    headers: { accept: "application/json" }
-  });
-  if (!response.ok) return false;
-  const data = await response.json() as { user?: { id?: string } } | null;
-  return Boolean(data?.user?.id);
-}
-
 function AuthPage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
@@ -620,6 +611,8 @@ function ChatPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<"idle" | "copied" | "error">("idle");
   const [sessionUser, setSessionUser] = useState<ChatSessionUser | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [accountError, setAccountError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [remoteVideoActive, setRemoteVideoActive] = useState(visualDemo);
   const camera = useCamera(state !== "permission");
@@ -635,9 +628,8 @@ function ChatPage() {
 
   useEffect(() => {
     let active = true;
-    void fetch("/api/auth/get-session", { credentials: "include" })
-      .then(async (response) => response.ok ? response.json() : null)
-      .then((session: { user?: ChatSessionUser } | null) => {
+    void getBrowserSession()
+      .then((session) => {
         if (active) setSessionUser(session?.user ?? null);
       })
       .catch(() => {
@@ -744,7 +736,26 @@ function ChatPage() {
     clearRemoteMedia();
     const protocol = location.protocol === "https:" ? "wss" : "ws";
     try {
-      const socket = new WebSocket(`${protocol}://${location.host}/ws/v1`);
+      const ticketResponse = await fetch("/api/chat/ws-ticket", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json"
+        },
+        body: "{}"
+      });
+      if (!ticketResponse.ok) {
+        setState(ticketResponse.status === 401 ? "auth-required" : "connection-error");
+        return;
+      }
+      const ticketData = await ticketResponse.json() as { ticket?: string };
+      if (!ticketData.ticket) {
+        setState("connection-error");
+        return;
+      }
+      const socket = new WebSocket(`${protocol}://${location.host}/ws/v1?ticket=${encodeURIComponent(ticketData.ticket)}`);
       closingSocketRef.current = false;
       socketRef.current = socket;
       socket.addEventListener("open", () => {
@@ -874,12 +885,20 @@ function ChatPage() {
   };
 
   const signOut = async () => {
-    await fetch("/api/auth/sign-out", {
-      method: "POST",
-      credentials: "include"
-    }).catch(() => undefined);
-    setAccountMenuOpen(false);
-    navigate("/auth", { replace: true });
+    setSigningOut(true);
+    setAccountError("");
+    try {
+      await signOutBrowserSession();
+      setSessionUser(null);
+      setAccountMenuOpen(false);
+      navigate("/auth", { replace: true });
+    } catch {
+      setAccountError(locale === "es"
+        ? "No pudimos cerrar la sesión. Inténtalo nuevamente."
+        : "We couldn't sign you out. Please try again.");
+    } finally {
+      setSigningOut(false);
+    }
   };
 
   const canOpenAdmin = ["moderator", "admin", "superuser"].includes(sessionUser?.role ?? "");
@@ -941,9 +960,11 @@ function ChatPage() {
                   {locale === "es" ? "Centro de seguridad" : "Safety center"}
                 </Link>
                 {sessionUser ? (
-                  <button type="button" role="menuitem" onClick={() => void signOut()}>
+                  <button type="button" role="menuitem" disabled={signingOut} onClick={() => void signOut()}>
                     <SignOut />
-                    {locale === "es" ? "Cerrar sesión" : "Sign out"}
+                    {signingOut
+                      ? (locale === "es" ? "Cerrando sesión…" : "Signing out…")
+                      : (locale === "es" ? "Cerrar sesión" : "Sign out")}
                   </button>
                 ) : (
                   <Link role="menuitem" to="/auth?next=/chat" onClick={() => setAccountMenuOpen(false)}>
@@ -951,6 +972,7 @@ function ChatPage() {
                     {locale === "es" ? "Iniciar sesión" : "Sign in"}
                   </Link>
                 )}
+                {accountError && <p className="account-menu__error" role="alert">{accountError}</p>}
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
@@ -11,7 +11,12 @@ class PendingWebSocket {
   readonly CONNECTING = 0;
   readonly OPEN = 1;
   readonly CLOSED = 3;
+  static lastUrl = "";
   readyState = PendingWebSocket.CONNECTING;
+
+  constructor(url: string) {
+    PendingWebSocket.lastUrl = url;
+  }
 
   addEventListener() {}
   send() {}
@@ -28,6 +33,29 @@ const cameraStream = {
 
 beforeEach(() => {
   window.history.pushState({}, "", "/chat");
+  PendingWebSocket.lastUrl = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/chat/ws-ticket") {
+      return new Response(JSON.stringify({ ticket: "short-lived-ticket" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url === "/api/config") {
+      return new Response(JSON.stringify({ features: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url === "/api/auth/get-session") {
+      return new Response("null", {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    return new Response("{}", { status: 200 });
+  }));
   Object.defineProperty(globalThis, "WebSocket", {
     configurable: true,
     value: PendingWebSocket
@@ -41,6 +69,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("real chat entry", () => {
@@ -52,6 +81,11 @@ describe("real chat entry", () => {
     });
 
     expect(screen.getByText(/buscando una persona|looking for someone/i)).toBeVisible();
+    await waitFor(() => expect(PendingWebSocket.lastUrl).toContain("/ws/v1?ticket=short-lived-ticket"));
+    expect(fetch).toHaveBeenCalledWith("/api/chat/ws-ticket", expect.objectContaining({
+      method: "POST",
+      credentials: "include"
+    }));
     expect(document.querySelector('img[src="/assets/remote-participant.png"]')).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /siguiente|next/i })).toBeDisabled();
   });

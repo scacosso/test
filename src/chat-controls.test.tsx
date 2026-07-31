@@ -72,4 +72,33 @@ describe("chat header controls", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     expect(screen.getByRole("button", { name: "Enlace copiado" })).toBeVisible();
   });
+
+  it("does not return to chat after signing out", async () => {
+    let sessionActive = true;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/sign-out")) {
+        sessionActive = false;
+        return response({ success: true });
+      }
+      if (url.includes("/api/auth/get-session")) {
+        return response(sessionActive
+          ? { user: { id: "user-1", name: "Test", email: "test@test.com", role: "user" } }
+          : null);
+      }
+      if (url.includes("/api/config")) return response({ features: { reporting: true } });
+      return response({});
+    }));
+
+    render(<BrowserRouter><App /></BrowserRouter>);
+
+    fireEvent.click(screen.getByRole("button", { name: /abrir men/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /cerrar sesi/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/auth"));
+    expect(fetch).toHaveBeenCalledWith("/api/auth/sign-out", expect.objectContaining({
+      credentials: "include",
+      body: "{}"
+    }));
+  });
 });

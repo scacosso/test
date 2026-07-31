@@ -21,4 +21,24 @@ describe("forwardAuthResponseHeaders", () => {
       "session_data=two; Path=/; HttpOnly; Secure; SameSite=Lax"
     ]);
   });
+
+  it("expires secure and legacy session cookies on sign out", () => {
+    const response = new Response(JSON.stringify({ success: true }), {
+      headers: { "content-type": "application/json" }
+    });
+    const header = vi.fn();
+
+    forwardAuthResponseHeaders({ header }, response, {
+      clearSessionCookies: true,
+      secureCookies: true
+    });
+
+    const cookieCall = header.mock.calls.find(([name]) => name === "set-cookie");
+    expect(cookieCall?.[1]).toEqual(expect.arrayContaining([
+      expect.stringContaining("better-auth.session_token=;"),
+      expect.stringContaining("__Secure-better-auth.session_token=;"),
+      expect.stringContaining("Max-Age=0"),
+      expect.stringContaining("Secure")
+    ]));
+  });
 });

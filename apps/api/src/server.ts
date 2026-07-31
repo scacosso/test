@@ -54,6 +54,7 @@ import { Matchmaker, type Match } from "./matchmaker.js";
 import { healthEvidenceStore, readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
+import { consumeWsTicket, createWsTicket } from "./ws-ticket.js";
 
 type SocketLike = {
   readyState: number;
@@ -160,6 +161,19 @@ app.get("/api/config", async () => {
   };
 });
 
+app.post("/api/chat/ws-ticket", {
+  config: { rateLimit: { max: 30, timeWindow: "1 minute" } }
+}, async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await sessionUser(requestHeaders(request));
+  if (!user) return reply.code(401).send({ error: "unauthorized" });
+  reply.header("cache-control", "no-store");
+  return {
+    ticket: createWsTicket(user.id, config.authSecret),
+    expiresInMs: 30_000
+  };
+});
+
 const authHandler = auth;
 if (authHandler) {
   app.route({
@@ -172,6 +186,7 @@ if (authHandler) {
       const isAnonymousSignIn = request.method === "POST" && target.pathname.endsWith("/sign-in/anonymous");
       const isEmailSignUp = request.method === "POST" && target.pathname.endsWith("/sign-up/email");
       const isEmailSignIn = request.method === "POST" && target.pathname.endsWith("/sign-in/email");
+      const isSignOut = request.method === "POST" && target.pathname.endsWith("/sign-out");
 
       if (isAnonymousSignIn && !features.guest_access) {
         return reply.code(403).send({ error: "guest_access_disabled" });
@@ -193,7 +208,10 @@ if (authHandler) {
         body
       }));
       reply.code(response.status);
-      forwardAuthResponseHeaders(reply, response);
+      forwardAuthResponseHeaders(reply, response, {
+        clearSessionCookies: isSignOut,
+        secureCookies: config.nodeEnv === "production"
+      });
       reply.header("cache-control", "no-store");
       const responseBody = Buffer.from(await response.arrayBuffer());
       if (response.ok && (isAnonymousSignIn || isEmailSignUp || isEmailSignIn)) {
@@ -735,13 +753,20 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
     clientSocket.close(1013, "At capacity");
     return;
   }
-  const query = request.query as { user?: string };
+  const query = request.query as { user?: string; ticket?: string };
   const authenticated = await sessionUser(requestHeaders(request));
-  if (!authenticated && !config.demoMode) {
+  const ticketUserId = query.ticket
+    ? consumeWsTicket(query.ticket, config.authSecret)
+    : null;
+  if (authenticated && ticketUserId && authenticated.id !== ticketUserId) {
+    clientSocket.close(1008, "Authentication mismatch");
+    return;
+  }
+  if (!authenticated && !ticketUserId && !config.demoMode) {
     clientSocket.close(1008, "Authentication required");
     return;
   }
-  const userId = authenticated?.id ?? (query.user ? query.user.slice(0, 128) : randomUUID());
+  const userId = authenticated?.id ?? ticketUserId ?? (query.user ? query.user.slice(0, 128) : randomUUID());
   if (users.has(userId)) {
     clientSocket.close(1008, "Duplicate connection");
     return;

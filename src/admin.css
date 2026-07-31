@@ -119,6 +119,7 @@
 }
 
 .sidebar-logout:hover { color: #fff; background: rgba(255,255,255,.05); }
+.sidebar-logout-error { margin: 0 10px 6px; color: #ff9d8e; font-size: 10px; line-height: 1.35; }
 
 .superadmin-main { min-width: 0; }
 
