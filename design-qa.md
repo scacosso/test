@@ -83,6 +83,43 @@ final result: passed
 
 ---
 
+# Super Admin live-room review QA
+
+## Acceptance surfaces
+
+- Implementation: `/admin/live`
+- Desktop evidence: `design/implementation-live-review-desktop.png`
+- Mobile evidence: `design/implementation-live-review-mobile.png`
+- Viewports: 1440 × 1024 and 390 × 844
+- State: authenticated superuser, two active rooms, one concurrent review marker, mandatory-reason dialog, temporary viewer, and confirmed close
+
+## Browser evidence
+
+- Permission-filtered navigation exposes the page only with `live:read`.
+- Active rooms refresh every five seconds while the tab is visible.
+- Room cards show participants, start time, active reviews, and an explicit observe action.
+- The start action remains disabled until a reason of at least three characters is entered.
+- Starting a review opens the full-screen viewer; closing it calls the audited end endpoint and confirms disconnection.
+- Desktop and mobile have no horizontal overflow.
+- The mobile navigation collapses cleanly and room cards stack without clipped controls.
+- Browser console errors: none.
+
+## Security and privacy evidence
+
+- The server route requires `superuser`; `admin` and `moderator` lack both live permissions.
+- The LiveKit grant is hidden and subscribe-only, with publishing and data disabled.
+- Tokens expire after 90 seconds, no recording or download control is exposed, and expired reviews are closed by the API cleanup timer.
+- Start and end records are written to `audit_log`, including forced endings when the room closes.
+- The permission screen and privacy page disclose temporary authorized safety review before a user joins a call.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+final result: passed
+
+---
+
 # Super Admin console design QA
 
 ## Comparison target

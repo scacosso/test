@@ -14,6 +14,9 @@ describe("admin permissions", () => {
     expect(permissionsFor("admin")).not.toContain("users:roles");
     expect(permissionsFor("superuser")).toContain("features:write");
     expect(permissionsFor("superuser")).toContain("users:roles");
+    expect(permissionsFor("superuser")).toContain("live:review");
+    expect(permissionsFor("admin")).not.toContain("live:read");
+    expect(permissionsFor("moderator")).not.toContain("live:review");
   });
 
   it("accepts only supported persisted roles", () => {

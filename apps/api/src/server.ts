@@ -49,7 +49,13 @@ import {
   recordConsent,
   updateFeatureFlags
 } from "./db.js";
-import { healthLiveKit, prepareRoom, terminateRoom } from "./livekit.js";
+import {
+  createLiveReviewToken,
+  healthLiveKit,
+  prepareRoom,
+  removeLiveReviewParticipant,
+  terminateRoom
+} from "./livekit.js";
 import { Matchmaker, type Match } from "./matchmaker.js";
 import {
   healthEvidenceStore,
@@ -75,7 +81,13 @@ type Client = {
   peerId?: string;
   queue?: { userId: string; socketId: string; language: string; country: string; joinedAt: number };
 };
-type ActiveSession = { id: string; roomName: string; users: [string, string]; messages: { userId: string; text: string; at: string }[] };
+type ActiveSession = {
+  id: string;
+  roomName: string;
+  users: [string, string];
+  startedAt: string;
+  messages: { userId: string; text: string; at: string }[];
+};
 type PendingReportEvidence = {
   reportId: string;
   sessionId: string;
@@ -304,6 +316,12 @@ const sanctionCreateSchema = z.object({
 });
 const sanctionRevokeSchema = z.object({
   reason: z.string().trim().min(3).max(500)
+});
+const liveReviewStartSchema = z.object({
+  reason: z.string().trim().min(3).max(500)
+});
+const liveReviewEndSchema = z.object({
+  endReason: z.enum(["viewer_closed", "viewer_disconnected", "token_expired"]).default("viewer_closed")
 });
 
 app.get("/api/admin/me", async (request, reply) => {
@@ -566,6 +584,157 @@ app.get("/api/admin/monitoring", async (request, reply) => {
   };
 });
 
+app.get("/api/admin/live/rooms", async (request, reply) => {
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  reply.header("cache-control", "no-store");
+  const sessionItems = [...sessions.values()].map((session) => ({
+    sessionId: session.id,
+    startedAt: session.startedAt,
+    participantCount: session.users.length,
+    users: session.users
+  }));
+  if (!pool || sessionItems.length === 0) {
+    return { generatedAt: new Date().toISOString(), rooms: sessionItems };
+  }
+  const userIds = [...new Set(sessionItems.flatMap((session) => session.users))];
+  const [accounts, reviews] = await Promise.all([
+    pool.query<{ id: string; email: string | null }>(
+      `select id, email from "user" where id = any($1::text[])`,
+      [userIds]
+    ),
+    pool.query<{ session_id: string; review_count: number }>(
+      `select session_id, count(*)::int as review_count
+       from live_reviews
+       where ended_at is null and token_expires_at > now()
+       group by session_id`
+    )
+  ]);
+  const emails = new Map(accounts.rows.map((account) => [account.id, account.email]));
+  const reviewCounts = new Map(reviews.rows.map((review) => [review.session_id, Number(review.review_count)]));
+  return {
+    generatedAt: new Date().toISOString(),
+    rooms: sessionItems.map((session) => ({
+      ...session,
+      activeReviewCount: reviewCounts.get(session.sessionId) ?? 0,
+      users: session.users.map((id) => ({ id, email: emails.get(id) ?? null }))
+    }))
+  };
+});
+
+app.post("/api/admin/live/rooms/:id/reviews", {
+  config: { rateLimit: { max: 10, timeWindow: "1 minute" } }
+}, async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const sessionId = (request.params as { id: string }).id;
+  const parsed = liveReviewStartSchema.safeParse(request.body);
+  if (!uuidSchema.safeParse(sessionId).success || !parsed.success) {
+    return reply.code(400).send({ error: "invalid_live_review" });
+  }
+  const features = await getFeatureFlags();
+  if (!features.moderation) return reply.code(503).send({ error: "moderation_disabled" });
+  const session = sessions.get(sessionId);
+  if (!session) return reply.code(404).send({ error: "room_not_active" });
+  if (!pool) return reply.code(503).send({ error: "database_unavailable" });
+
+  const reviewId = randomUUID();
+  const participantIdentity = `live-review-${reviewId}`;
+  const expiresAt = new Date(Date.now() + 90_000);
+  let token: string;
+  try {
+    token = await createLiveReviewToken(session.roomName, participantIdentity);
+  } catch (error) {
+    request.log.error(error, "Unable to create live-review token");
+    return reply.code(503).send({ error: "livekit_unavailable" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `insert into live_reviews (
+         id, actor_id, session_id, room_name, participant_identity, reason, token_expires_at
+       ) values ($1, $2, $3, $4, $5, $6, $7)`,
+      [reviewId, user.id, session.id, session.roomName, participantIdentity, parsed.data.reason, expiresAt]
+    );
+    await client.query(
+      `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+       values ($1, 'live_review.started', 'video_session', $2, $3, $4::jsonb)`,
+      [
+        user.id,
+        session.id,
+        parsed.data.reason,
+        JSON.stringify({ reviewId, participantIdentity, tokenExpiresAt: expiresAt.toISOString() })
+      ]
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+  reply.header("cache-control", "no-store");
+  return {
+    reviewId,
+    sessionId: session.id,
+    token,
+    livekitUrl: config.livekitUrl,
+    expiresAt: expiresAt.toISOString()
+  };
+});
+
+app.post("/api/admin/live/reviews/:id/end", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const user = await requireRole(request, reply, ["superuser"]);
+  if (!user) return;
+  const reviewId = (request.params as { id: string }).id;
+  const parsed = liveReviewEndSchema.safeParse(request.body ?? {});
+  if (!uuidSchema.safeParse(reviewId).success || !parsed.success) {
+    return reply.code(400).send({ error: "invalid_live_review_end" });
+  }
+  if (!pool) return reply.code(503).send({ error: "database_unavailable" });
+  const client = await pool.connect();
+  let ended: { room_name: string; participant_identity: string; session_id: string } | undefined;
+  try {
+    await client.query("begin");
+    const result = await client.query<{
+      room_name: string;
+      participant_identity: string;
+      session_id: string;
+    }>(
+      `update live_reviews
+       set ended_at = now(), end_reason = $2
+       where id = $1 and ended_at is null
+       returning room_name, participant_identity, session_id`,
+      [reviewId, parsed.data.endReason]
+    );
+    ended = result.rows[0];
+    if (ended) {
+      await client.query(
+        `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+         values ($1, 'live_review.ended', 'video_session', $2, $3, $4::jsonb)`,
+        [
+          user.id,
+          ended.session_id,
+          parsed.data.endReason,
+          JSON.stringify({ reviewId, participantIdentity: ended.participant_identity })
+        ]
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (!ended) return reply.code(404).send({ error: "review_not_active" });
+  await removeLiveReviewParticipant(ended.room_name, ended.participant_identity);
+  return { ended: true };
+});
+
 app.get("/api/admin/audit", async (request, reply) => {
   const user = await requireRole(request, reply, ["superuser"]);
   if (!user) return;
@@ -731,7 +900,13 @@ async function matchFound(left: Client, right: Client) {
     await terminateRoom(roomName);
     throw error;
   }
-  sessions.set(sessionId, { id: sessionId, roomName, users: [left.userId, right.userId], messages: [] });
+  sessions.set(sessionId, {
+    id: sessionId,
+    roomName,
+    users: [left.userId, right.userId],
+    startedAt: new Date().toISOString(),
+    messages: []
+  });
   left.sessionId = right.sessionId = sessionId;
   left.peerId = right.userId;
   right.peerId = left.userId;
@@ -804,12 +979,59 @@ async function dispatchMatch(result: Match | null, requestId?: string, attempt =
   }
 }
 
+async function expireLiveReviews() {
+  if (!pool) return;
+  const expired = await pool.query<{
+    id: string;
+    actor_id: string;
+    session_id: string;
+    room_name: string;
+    participant_identity: string;
+  }>(
+    `with ended as (
+       update live_reviews
+       set ended_at = now(), end_reason = 'token_expired'
+       where ended_at is null and token_expires_at <= now()
+       returning id, actor_id, session_id, room_name, participant_identity
+     ), audited as (
+       insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+       select actor_id, 'live_review.ended', 'video_session', session_id::text,
+              'token_expired', jsonb_build_object('reviewId', id, 'participantIdentity', participant_identity)
+       from ended
+     )
+     select id, actor_id, session_id, room_name, participant_identity from ended`
+  );
+  await Promise.all(expired.rows.map((review) =>
+    removeLiveReviewParticipant(review.room_name, review.participant_identity)
+  ));
+}
+
 async function endSession(client: Client, reason: string, notifyPeer = true) {
   if (!client.sessionId) return;
   const session = sessions.get(client.sessionId);
   const peer = client.peerId ? users.get(client.peerId) : undefined;
   if (session) {
     sessions.delete(session.id);
+    if (pool) {
+      const reviews = await pool.query<{ room_name: string; participant_identity: string }>(
+        `with ended as (
+           update live_reviews
+           set ended_at = now(), end_reason = 'room_ended'
+           where session_id = $1 and ended_at is null
+           returning id, actor_id, session_id, room_name, participant_identity
+         ), audited as (
+           insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+           select actor_id, 'live_review.ended', 'video_session', session_id::text,
+                  'room_ended', jsonb_build_object('reviewId', id, 'participantIdentity', participant_identity)
+           from ended
+         )
+         select room_name, participant_identity from ended`,
+        [session.id]
+      );
+      await Promise.all(reviews.rows.map((review) =>
+        removeLiveReviewParticipant(review.room_name, review.participant_identity)
+      ));
+    }
     await closeSession(session.id, reason);
     await terminateRoom(session.roomName);
     await Promise.all(session.users.map((id) => matcher.release(id)));
@@ -998,3 +1220,7 @@ const retentionTimer = setInterval(() => {
   void purgeExpiredEvidence().catch((error) => app.log.error(error, "Evidence retention failed"));
 }, 24 * 60 * 60 * 1000);
 retentionTimer.unref();
+const liveReviewTimer = setInterval(() => {
+  void expireLiveReviews().catch((error) => app.log.error(error, "Live-review expiration failed"));
+}, 15 * 1000);
+liveReviewTimer.unref();

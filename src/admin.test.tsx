@@ -31,7 +31,9 @@ describe("super admin console", () => {
             "reports:read",
             "sanctions:read",
             "monitoring:read",
-            "audit:read"
+            "audit:read",
+            "live:read",
+            "live:review"
           ]
         }), { status: 200 });
       }
@@ -76,5 +78,47 @@ describe("super admin console", () => {
     expect(await screen.findByText("Control de funciones de la plataforma")).toBeVisible();
     expect(screen.getByRole("link", { name: /Usuarios/ })).toBeVisible();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/me", expect.any(Object)));
+  });
+
+  it("lists active rooms and requires a justification before live review", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/admin/me")) {
+        return new Response(JSON.stringify({
+          user: { id: "owner", email: "owner@example.com", role: "superuser", isGuest: false },
+          permissions: ["live:read", "live:review"]
+        }), { status: 200 });
+      }
+      if (url.endsWith("/api/admin/live/rooms")) {
+        return new Response(JSON.stringify({
+          generatedAt: new Date().toISOString(),
+          rooms: [{
+            sessionId: "166660c9-fae0-4a50-9731-f3a1cb301f85",
+            startedAt: new Date().toISOString(),
+            participantCount: 2,
+            activeReviewCount: 0,
+            users: [
+              { id: "user-a", email: "a@example.com" },
+              { id: "user-b", email: "b@example.com" }
+            ]
+          }]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+    }));
+
+    render(
+      <MemoryRouter initialEntries={["/admin/live"]}>
+        <Routes>
+          <Route path="/admin/*" element={<AdminConsole locale="es" setLocale={() => undefined} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Revisión de salas en vivo" })).toBeVisible();
+    expect(await screen.findByText("a@example.com · b@example.com")).toBeVisible();
+    screen.getByRole("button", { name: /Observar sala/ }).click();
+    expect(await screen.findByRole("heading", { name: "Justificación de la revisión" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Iniciar revisión/ })).toBeDisabled();
   });
 });

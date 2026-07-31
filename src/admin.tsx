@@ -18,6 +18,7 @@ import {
   ShieldWarning,
   SignOut,
   SlidersHorizontal,
+  SpinnerGap,
   UserCircle,
   UsersThree,
   VideoCamera,
@@ -27,6 +28,8 @@ import {
 import {
   FormEvent,
   ReactNode,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -43,6 +46,9 @@ import {
   useNavigate
 } from "react-router-dom";
 import { signOutBrowserSession } from "./auth-client";
+import type { LiveReviewConnection } from "./admin-live-review";
+
+const AdminLiveReviewViewer = lazy(() => import("./admin-live-review"));
 
 export type AdminLocale = "es" | "en";
 type Role = "user" | "moderator" | "admin" | "superuser";
@@ -101,6 +107,14 @@ type Monitoring = {
     moderation_lag_seconds: number | null;
     recorded_at: string;
   }>;
+};
+
+type LiveRoom = {
+  sessionId: string;
+  startedAt: string;
+  participantCount: number;
+  activeReviewCount?: number;
+  users: Array<string | { id: string; email: string | null }>;
 };
 
 type AuditEntry = {
@@ -199,6 +213,7 @@ const adminCopy = {
       features: "Funciones",
       users: "Usuarios",
       reports: "Reportes",
+      live: "Salas en vivo",
       sanctions: "Sanciones",
       monitoring: "Monitoreo",
       audit: "Auditoría"
@@ -208,6 +223,7 @@ const adminCopy = {
       features: "Funciones de la plataforma",
       users: "Usuarios y permisos",
       reports: "Reportes e incidentes",
+      liveRooms: "Revisión de salas en vivo",
       sanctions: "Sanciones",
       monitoring: "Monitoreo operativo",
       audit: "Auditoría",
@@ -300,6 +316,24 @@ const adminCopy = {
       select: "Selecciona un reporte para revisar el incidente.",
       evidenceNotice: "Cada acceso queda registrado y la evidencia vence a los 30 días."
     },
+    liveReview: {
+      title: "Salas activas",
+      description: "Vista temporal de seguridad para superusuarios. No permite publicar, grabar ni descargar.",
+      updated: "Última actualización",
+      participants: "Participantes",
+      started: "Inicio",
+      activeReviews: "Revisiones activas",
+      observe: "Observar sala",
+      empty: "No hay salas activas en este momento.",
+      reasonTitle: "Justificación de la revisión",
+      reasonBody: "Escribe el motivo operativo antes de abrir la transmisión. El inicio y el cierre quedarán auditados.",
+      reasonPlaceholder: "Ej.: revisión de una alerta de seguridad",
+      start: "Iniciar revisión",
+      close: "Cerrar revisión",
+      expires: "Acceso temporal hasta",
+      noRecording: "Solo suscripción · sin grabación · token de 90 segundos",
+      disconnected: "La revisión terminó y el participante revisor fue desconectado."
+    },
     sanctions: {
       title: "Historial de sanciones",
       create: "Crear sanción",
@@ -341,6 +375,7 @@ const adminCopy = {
       features: "Features",
       users: "Users",
       reports: "Reports",
+      live: "Live rooms",
       sanctions: "Sanctions",
       monitoring: "Monitoring",
       audit: "Audit"
@@ -350,6 +385,7 @@ const adminCopy = {
       features: "Platform features",
       users: "Users and permissions",
       reports: "Reports and incidents",
+      liveRooms: "Live room review",
       sanctions: "Sanctions",
       monitoring: "Operational monitoring",
       audit: "Audit",
@@ -441,6 +477,24 @@ const adminCopy = {
       hold: "24 h hold",
       select: "Select a report to review the incident.",
       evidenceNotice: "Every access is audited and evidence expires after 30 days."
+    },
+    liveReview: {
+      title: "Active rooms",
+      description: "Temporary safety view for superusers. Publishing, recording, and downloading are disabled.",
+      updated: "Last updated",
+      participants: "Participants",
+      started: "Started",
+      activeReviews: "Active reviews",
+      observe: "Observe room",
+      empty: "There are no active rooms right now.",
+      reasonTitle: "Review justification",
+      reasonBody: "Enter the operational reason before opening the stream. The start and end will be audited.",
+      reasonPlaceholder: "Example: reviewing a safety alert",
+      start: "Start review",
+      close: "Close review",
+      expires: "Temporary access until",
+      noRecording: "Subscribe only · no recording · 90-second token",
+      disconnected: "The review ended and the reviewer participant was disconnected."
     },
     sanctions: {
       title: "Sanction history",
@@ -1343,6 +1397,208 @@ function MonitoringPage({ locale }: { locale: AdminLocale }) {
   );
 }
 
+function LiveReviewPage({ locale }: { locale: AdminLocale }) {
+  const t = adminCopy[locale];
+  const [rooms, setRooms] = useState<LiveRoom[]>([]);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [selected, setSelected] = useState<LiveRoom | null>(null);
+  const [reason, setReason] = useState("");
+  const [connection, setConnection] = useState<LiveReviewConnection | null>(null);
+  const connectionRef = useRef<LiveReviewConnection | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [starting, setStarting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const result = await adminRequest<{ generatedAt: string; rooms: LiveRoom[] }>("/api/admin/live/rooms");
+      setRooms(result.rooms);
+      setGeneratedAt(result.generatedAt);
+      setState("ready");
+    } catch {
+      setState("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden && !connectionRef.current) void load();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const finishReview = useCallback(async (
+    endReason: "viewer_closed" | "viewer_disconnected" | "token_expired"
+  ) => {
+    const current = connectionRef.current;
+    if (!current) return;
+    connectionRef.current = null;
+    setConnection(null);
+    try {
+      await adminRequest(`/api/admin/live/reviews/${current.reviewId}/end`, {
+        method: "POST",
+        body: JSON.stringify({ endReason })
+      });
+      setMessage(t.liveReview.disconnected);
+    } catch {
+      setMessage(t.common.error);
+    }
+    void load();
+  }, [load, t.common.error, t.liveReview.disconnected]);
+
+  useEffect(() => {
+    const closeWithoutWaiting = () => {
+      const current = connectionRef.current;
+      if (!current) return;
+      connectionRef.current = null;
+      void fetch(`/api/admin/live/reviews/${current.reviewId}/end`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ endReason: "viewer_closed" }),
+        keepalive: true
+      });
+    };
+    window.addEventListener("pagehide", closeWithoutWaiting);
+    return () => {
+      window.removeEventListener("pagehide", closeWithoutWaiting);
+      closeWithoutWaiting();
+    };
+  }, []);
+
+  const startReview = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selected || reason.trim().length < 3) return;
+    setStarting(true);
+    setMessage(null);
+    try {
+      const result = await adminRequest<LiveReviewConnection>(
+        `/api/admin/live/rooms/${selected.sessionId}/reviews`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: reason.trim() })
+        }
+      );
+      connectionRef.current = result;
+      setConnection(result);
+      setSelected(null);
+      setReason("");
+    } catch {
+      setMessage(t.common.error);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const accountLabel = (user: LiveRoom["users"][number]) => {
+    if (typeof user === "string") return user;
+    return user.email ?? user.id;
+  };
+
+  if (state === "loading") {
+    return <PageState title={t.common.loading} icon={<ArrowClockwise className="spin" />} />;
+  }
+
+  return (
+    <section className="admin-panel live-review-page">
+      <header className="admin-panel__toolbar live-review-toolbar">
+        <div>
+          <h2>{t.liveReview.title}</h2>
+          <p>{t.liveReview.description}</p>
+        </div>
+        <div className="live-review-toolbar__status">
+          {generatedAt ? <span>{t.liveReview.updated}: {relativeTime(generatedAt, locale)}</span> : null}
+          <button className="icon-button" onClick={() => void load()} aria-label={t.common.retry}>
+            <ArrowClockwise />
+          </button>
+        </div>
+      </header>
+      {message ? <div className="admin-status admin-status--success"><CheckCircle />{message}</div> : null}
+      {state === "error" ? (
+        <PageState title={t.common.error} icon={<Warning />} action={<button className="admin-button admin-button--primary" onClick={() => void load()}>{t.common.retry}</button>} />
+      ) : rooms.length === 0 ? (
+        <PageState title={t.liveReview.empty} icon={<VideoCamera />} />
+      ) : (
+        <div className="live-room-grid">
+          {rooms.map((room) => (
+            <article className="live-room-card" key={room.sessionId}>
+              <header>
+                <span className="live-room-card__pulse"><i />{t.header.live}</span>
+                <code>{room.sessionId.slice(0, 8)}</code>
+              </header>
+              <div className="live-room-card__video"><VideoCamera /><strong>{room.participantCount}</strong></div>
+              <dl>
+                <div><dt>{t.liveReview.participants}</dt><dd>{room.users.map(accountLabel).join(" · ")}</dd></div>
+                <div><dt>{t.liveReview.started}</dt><dd>{formatDate(room.startedAt, locale)}</dd></div>
+                <div><dt>{t.liveReview.activeReviews}</dt><dd>{room.activeReviewCount ?? 0}</dd></div>
+              </dl>
+              <button className="admin-button admin-button--primary" onClick={() => {
+                setSelected(room);
+                setReason("");
+                setMessage(null);
+              }}>
+                <Eye />{t.liveReview.observe}
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {selected ? (
+        <div className="admin-modal-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSelected(null);
+        }}>
+          <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="live-review-reason-title">
+            <header>
+              <div><span><ShieldCheck /></span><h2 id="live-review-reason-title">{t.liveReview.reasonTitle}</h2></div>
+              <button className="icon-button" onClick={() => setSelected(null)} aria-label={t.common.cancel}><X /></button>
+            </header>
+            <p>{t.liveReview.reasonBody}</p>
+            <form onSubmit={startReview}>
+              <textarea
+                autoFocus
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder={t.liveReview.reasonPlaceholder}
+                required
+                minLength={3}
+                maxLength={500}
+              />
+              <small>{t.liveReview.noRecording}</small>
+              <div>
+                <button type="button" className="admin-button admin-button--ghost" onClick={() => setSelected(null)}>{t.common.cancel}</button>
+                <button className="admin-button admin-button--primary" disabled={starting || reason.trim().length < 3}>
+                  {starting ? <SpinnerGap className="spin" /> : <Eye />}{t.liveReview.start}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {connection ? (
+        <div className="live-review-overlay" role="dialog" aria-modal="true" aria-label={t.header.live}>
+          <header>
+            <div>
+              <span className="live-room-card__pulse"><i />{t.header.live}</span>
+              <strong>{t.header.live} · {connection.sessionId.slice(0, 8)}</strong>
+              <small>{t.liveReview.expires}: {formatDate(connection.expiresAt, locale)}</small>
+            </div>
+            <button className="admin-button admin-button--primary" onClick={() => void finishReview("viewer_closed")}>
+              <X />{t.liveReview.close}
+            </button>
+          </header>
+          <Suspense fallback={<PageState title={t.common.loading} icon={<SpinnerGap className="spin" />} />}>
+            <AdminLiveReviewViewer connection={connection} locale={locale} onEnded={finishReview} />
+          </Suspense>
+          <footer><ShieldCheck />{t.liveReview.noRecording}</footer>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AuditTable({ entries, locale, compact = false }: { entries: AuditEntry[]; locale: AdminLocale; compact?: boolean }) {
   const t = adminCopy[locale];
   if (entries.length === 0) return <PageState title={t.common.empty} icon={<ClipboardText />} />;
@@ -1397,6 +1653,7 @@ const navItems = [
   { key: "features", to: "/admin/features", icon: SlidersHorizontal, permission: "features:read" },
   { key: "users", to: "/admin/users", icon: UsersThree, permission: "users:read" },
   { key: "reports", to: "/admin/reports", icon: Flag, permission: "reports:read" },
+  { key: "live", to: "/admin/live", icon: VideoCamera, permission: "live:read" },
   { key: "sanctions", to: "/admin/sanctions", icon: ShieldWarning, permission: "sanctions:read" },
   { key: "monitoring", to: "/admin/monitoring", icon: Pulse, permission: "monitoring:read" },
   { key: "audit", to: "/admin/audit", icon: ClipboardText, permission: "audit:read" }
@@ -1414,7 +1671,9 @@ function AdminShell(props: {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoutError, setLogoutError] = useState(false);
   const section = location.pathname.split("/")[2] || "overview";
-  const title = t.header[section as keyof typeof t.header] ?? t.header.overview;
+  const title = section === "live"
+    ? t.header.liveRooms
+    : t.header[section as keyof typeof t.header] ?? t.header.overview;
   const availableNav = navItems.filter((item) => props.identity.permissions.includes(item.permission));
   const currentDate = new Intl.DateTimeFormat(props.locale === "es" ? "es-AR" : "en-US", {
     day: "2-digit",
@@ -1509,6 +1768,7 @@ export function AdminConsole(props: {
         <Route path="features" element={identity.permissions.includes("features:read") ? <FeaturesPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
         <Route path="users" element={identity.permissions.includes("users:read") ? <UsersPage locale={props.locale} identity={identity} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
         <Route path="reports" element={identity.permissions.includes("reports:read") ? <ReportsPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
+        <Route path="live" element={identity.permissions.includes("live:read") ? <LiveReviewPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
         <Route path="sanctions" element={identity.permissions.includes("sanctions:read") ? <SanctionsPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
         <Route path="monitoring" element={identity.permissions.includes("monitoring:read") ? <MonitoringPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />
         <Route path="audit" element={identity.permissions.includes("audit:read") ? <AuditPage locale={props.locale} /> : <PageState title={t.common.accessDenied} icon={<ShieldWarning />} />} />

@@ -30,7 +30,9 @@ const rolePermissions: Record<Role, string[]> = {
     "sanctions:read",
     "sanctions:write",
     "monitoring:read",
-    "audit:read"
+    "audit:read",
+    "live:read",
+    "live:review"
   ]
 };
 

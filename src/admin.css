@@ -557,6 +557,111 @@
 .risk-badge { color: #a6372c; background: #ffe9e5; }
 .healthy-badge { color: #177d57; background: #e4f6ea; }
 
+.live-review-page { overflow: hidden; }
+.live-review-toolbar__status { display: flex; align-items: center; gap: 10px; color: var(--admin-muted); font-size: 9px; }
+.live-room-grid {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 14px;
+}
+.live-room-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--admin-line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(7, 39, 50, .045);
+}
+.live-room-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.live-room-card code { color: #6d8085; font: 8px/1 "Inter", sans-serif; }
+.live-room-card__pulse { display: inline-flex; align-items: center; gap: 6px; color: #147551; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.live-room-card__pulse i { width: 7px; height: 7px; border-radius: 50%; background: #2abc7a; box-shadow: 0 0 0 4px #e5f7ed; }
+.live-room-card__video {
+  min-height: 118px;
+  margin: 12px 0;
+  display: grid;
+  place-items: center;
+  position: relative;
+  color: #73cfc3;
+  border-radius: 7px;
+  background: linear-gradient(145deg, #07303d, #0d4752);
+}
+.live-room-card__video svg { font-size: 35px; }
+.live-room-card__video strong { position: absolute; right: 9px; bottom: 8px; color: #fff; font-size: 9px; }
+.live-room-card dl { margin: 0 0 13px; display: grid; gap: 8px; }
+.live-room-card dl div { min-width: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
+.live-room-card dt { color: #7d8e92; font-size: 8px; }
+.live-room-card dd { margin: 0; overflow: hidden; color: var(--admin-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; text-align: right; }
+.live-room-card > .admin-button { width: 100%; }
+
+.admin-modal-backdrop,
+.live-review-overlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+}
+.admin-modal-backdrop { display: grid; place-items: center; padding: 18px; background: rgba(3, 24, 32, .66); backdrop-filter: blur(5px); }
+.admin-modal {
+  width: min(480px, 100%);
+  padding: 20px;
+  color: var(--admin-ink);
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 30px 80px rgba(3, 24, 32, .28);
+}
+.admin-modal > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-modal > header > div { display: flex; align-items: center; gap: 10px; }
+.admin-modal > header span { width: 34px; height: 34px; display: grid; place-items: center; color: var(--admin-teal); border-radius: 8px; background: var(--admin-teal-soft); font-size: 18px; }
+.admin-modal h2 { margin: 0; font-size: 15px; }
+.admin-modal > p { margin: 14px 0; color: var(--admin-muted); font-size: 10px; line-height: 1.55; }
+.admin-modal form { display: grid; gap: 10px; }
+.admin-modal textarea {
+  min-height: 105px;
+  padding: 10px;
+  resize: vertical;
+  color: var(--admin-ink);
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  outline: 0;
+  font: 10px/1.5 "Inter", sans-serif;
+}
+.admin-modal textarea:focus { border-color: var(--admin-teal); box-shadow: 0 0 0 3px rgba(10, 169, 149, .1); }
+.admin-modal form small { color: #75878c; font-size: 8px; }
+.admin-modal form > div { display: flex; justify-content: flex-end; gap: 8px; }
+
+.live-review-overlay {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  color: #fff;
+  background: #041f29;
+}
+.live-review-overlay > header {
+  min-height: 70px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+  background: #062936;
+}
+.live-review-overlay > header > div { min-width: 0; display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 12px; }
+.live-review-overlay > header strong { font-size: 13px; }
+.live-review-overlay > header small { grid-column: 2; margin-top: 4px; color: #9eb8be; font-size: 8px; }
+.live-review-overlay > footer { min-height: 40px; padding: 0 18px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #8fb2b8; border-top: 1px solid rgba(255,255,255,.1); font-size: 9px; }
+.live-review-stage { min-height: 0; position: relative; overflow: hidden; background: #02171f; }
+.live-review-stage__state { height: 100%; min-height: 300px; display: grid; place-items: center; align-content: center; gap: 12px; color: #8ecbc4; }
+.live-review-stage__state svg { font-size: 36px; }
+.live-review-stage__state strong { color: #d8e8e9; font-size: 12px; }
+.live-review-stage__state--error { color: #ff8c7b; }
+.live-review-grid { height: 100%; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.live-review-grid.is-single { grid-template-columns: minmax(0, 1fr); }
+.live-review-video { min-width: 0; min-height: 0; position: relative; overflow: hidden; border-radius: 9px; background: #0a303b; }
+.live-review-video video { width: 100%; height: 100%; display: block; object-fit: contain; background: #031921; }
+.live-review-video span { max-width: calc(100% - 20px); padding: 5px 8px; position: absolute; left: 10px; bottom: 10px; overflow: hidden; color: #fff; border-radius: 5px; background: rgba(2, 20, 27, .76); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+
 .admin-detail { padding: 17px; }
 .admin-detail > header { padding-bottom: 16px; display: flex; align-items: center; gap: 11px; border-bottom: 1px solid var(--admin-line); }
 .admin-detail > header h2 { margin: 0; font-size: 14px; }
@@ -790,6 +895,7 @@
   .reports-layout { grid-template-columns: 250px minmax(0, 1fr); }
   .service-health > div { grid-template-columns: repeat(3, 1fr); }
   .service-health article { border-bottom: 1px solid var(--admin-line); }
+  .live-room-grid { grid-template-columns: repeat(2, minmax(210px, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -868,4 +974,13 @@
   .service-health > div { grid-template-columns: 1fr; }
   .service-health article { border-right: 0; }
   .monitoring-chart { min-height: 210px; }
+  .live-review-toolbar__status { width: 100%; justify-content: space-between; }
+  .live-room-grid { padding: 12px; grid-template-columns: 1fr; }
+  .live-room-card__video { min-height: 145px; }
+  .live-review-overlay > header { align-items: flex-start; }
+  .live-review-overlay > header > div { grid-template-columns: auto minmax(0, 1fr); }
+  .live-review-overlay > header .admin-button { min-width: 40px; padding: 0 10px; font-size: 0; }
+  .live-review-overlay > header .admin-button svg { font-size: 18px; }
+  .live-review-grid { padding: 7px; grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .live-review-video span { left: 7px; bottom: 7px; }
 }

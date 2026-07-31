@@ -119,7 +119,7 @@ export const copy = {
       placeholder: "Escribe un mensaje…",
       send: "Enviar",
       permissionTitle: "Activa cámara y micrófono",
-      permissionBody: "Necesitamos acceso para que la otra persona pueda verte y escucharte.",
+      permissionBody: "Necesitamos acceso para que la otra persona pueda verte y escucharte. Por seguridad, superusuarios autorizados pueden revisar temporalmente una sala activa; cada acceso queda auditado y no se graba.",
       allow: "Permitir acceso",
       denied: "No pudimos acceder a tu cámara. Revisa los permisos del navegador.",
       messages: ["¡Hola! ¿Cómo estás?", "Muy bien 😊 ¿Desde dónde te conectas?"],
@@ -187,7 +187,7 @@ export const copy = {
       placeholder: "Write a message…",
       send: "Send",
       permissionTitle: "Enable camera and microphone",
-      permissionBody: "We need access so the other person can see and hear you.",
+      permissionBody: "We need access so the other person can see and hear you. For safety, authorized superusers may temporarily review an active room; every access is audited and not recorded.",
       allow: "Allow access",
       denied: "We could not access your camera. Check your browser permissions.",
       messages: ["Hi! How are you?", "Great 😊 Where are you connecting from?"],
@@ -1222,8 +1222,8 @@ const legalContent = {
     en: ["Terms of use", "You must be 18 or older, use your own account, and respect others. Violations can lead to temporary holds or sanctions reviewed by moderators."]
   },
   privacy: {
-    es: ["Privacidad", "No grabamos llamadas. El transporte usa WebRTC/TLS, pero la moderación preventiva requiere acceso al contenido y por eso no ofrecemos cifrado de extremo a extremo. Solo ante una detección o reporte se conservan hasta tres capturas y veinte mensajes, cifrados y eliminados a los 30 días."],
-    en: ["Privacy", "We do not record calls. Transport uses WebRTC/TLS, but preventive moderation requires content access, so end-to-end encryption is not available. Only after a detection or report may up to three screenshots and twenty messages be encrypted and retained for 30 days."]
+    es: ["Privacidad", "No grabamos llamadas. El transporte usa WebRTC/TLS, pero la moderación preventiva requiere acceso al contenido y por eso no ofrecemos cifrado de extremo a extremo. Por seguridad, un superusuario autorizado puede observar temporalmente una sala activa con acceso auditado, sin publicar, grabar ni descargar. Solo ante una detección o reporte se conservan hasta tres capturas y veinte mensajes, cifrados y eliminados a los 30 días."],
+    en: ["Privacy", "We do not record calls. Transport uses WebRTC/TLS, but preventive moderation requires content access, so end-to-end encryption is not available. For safety, an authorized superuser may temporarily observe an active room through audited, subscribe-only access with no recording or download. Only after a detection or report may up to three screenshots and twenty messages be encrypted and retained for 30 days."]
   }
 } as const;
 
