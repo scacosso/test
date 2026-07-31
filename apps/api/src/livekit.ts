@@ -1,4 +1,4 @@
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
 import { config } from "./config.js";
 
 const roomService = config.livekitApiKey && config.livekitApiSecret
@@ -12,9 +12,10 @@ export function userPreviewPublisherGrant(roomName: string) {
     room: roomName,
     roomJoin: true,
     canPublish: true,
+    canPublishSources: [TrackSource.CAMERA],
     canSubscribe: false,
     canPublishData: false,
-    hidden: true
+    hidden: false
   };
 }
 

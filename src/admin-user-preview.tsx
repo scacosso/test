@@ -45,6 +45,8 @@ export default function AdminUserPreview(props: {
     let access: PreviewAccess | null = null;
     let room: Room | null = null;
     let renewalTimer = 0;
+    let videoTimer = 0;
+    let hasVideo = false;
 
     const closeAccess = (current: PreviewAccess) => {
       void fetch(`/api/admin/live/access/${current.accessId}/end`, {
@@ -76,6 +78,8 @@ export default function AdminUserPreview(props: {
         room = new Room({ adaptiveStream: true, dynacast: false });
         const attach = (track: RemoteTrack, _publication: unknown, participant: { identity: string }) => {
           if (participant.identity !== props.userId || track.kind !== Track.Kind.Video || !videoRef.current) return;
+          hasVideo = true;
+          window.clearTimeout(videoTimer);
           track.attach(videoRef.current);
           setState("playing");
         };
@@ -96,7 +100,13 @@ export default function AdminUserPreview(props: {
           if (participant.identity !== props.userId) continue;
           for (const publication of participant.videoTrackPublications.values()) {
             publication.setVideoQuality(VideoQuality.LOW);
+            if (publication.track) attach(publication.track, publication, participant);
           }
+        }
+        if (!hasVideo) {
+          videoTimer = window.setTimeout(() => {
+            if (active && !hasVideo) setState("error");
+          }, 12_000);
         }
         const remaining = Math.max(5_000, new Date(access.expiresAt).getTime() - Date.now() - 5_000);
         renewalTimer = window.setTimeout(() => {
@@ -110,6 +120,7 @@ export default function AdminUserPreview(props: {
     return () => {
       active = false;
       window.clearTimeout(renewalTimer);
+      window.clearTimeout(videoTimer);
       if (room) void room.disconnect(false);
       if (access) closeAccess(access);
     };

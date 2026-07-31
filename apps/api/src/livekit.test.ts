@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TrackSource } from "livekit-server-sdk";
 import {
   liveReviewGrant,
   userPreviewPublisherGrant,
@@ -28,14 +29,15 @@ describe("live review grants", () => {
     });
   });
 
-  it("keeps user camera presence hidden and publish-only", () => {
+  it("makes user camera presence visible to the private subscriber and camera-only", () => {
     expect(userPreviewPublisherGrant("preview-1")).toEqual({
       room: "preview-1",
       roomJoin: true,
       canPublish: true,
+      canPublishSources: [TrackSource.CAMERA],
       canSubscribe: false,
       canPublishData: false,
-      hidden: true
+      hidden: false
     });
   });
 
