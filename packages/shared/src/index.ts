@@ -43,7 +43,7 @@ export const queueJoinSchema = z.object({
 export const reportReasons = ["nudity", "harassment", "violence", "spam", "possible_minor"] as const;
 export const reportSchema = z.object({
   sessionId: z.string().uuid(),
-  reportedUserId: z.string().uuid(),
+  reportedUserId: z.string().min(1).max(128),
   reason: z.enum(reportReasons),
   details: z.string().max(1000).optional()
 });
