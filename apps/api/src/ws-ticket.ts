@@ -25,6 +25,18 @@ export function createWsTicket(
   return `${payload}.${sign(payload, secret)}`;
 }
 
+export function websocketTicketFromProtocols(
+  header: string | string[] | undefined,
+  fallback?: string
+) {
+  const protocols = (Array.isArray(header) ? header.join(",") : header ?? "")
+    .split(",")
+    .map((protocol) => protocol.trim());
+  return protocols[0] === "nexocam-v1" && protocols[1]
+    ? protocols[1]
+    : fallback;
+}
+
 export function consumeWsTicket(ticket: string, secret: string, now = Date.now()) {
   const [payload, suppliedSignature, extra] = ticket.split(".");
   if (!payload || !suppliedSignature || extra) return null;

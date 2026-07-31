@@ -54,7 +54,7 @@ import { Matchmaker, type Match } from "./matchmaker.js";
 import { healthEvidenceStore, readEncryptedEvidence, storeEncryptedChat } from "./evidence.js";
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
-import { consumeWsTicket, createWsTicket } from "./ws-ticket.js";
+import { consumeWsTicket, createWsTicket, websocketTicketFromProtocols } from "./ws-ticket.js";
 
 type SocketLike = {
   readyState: number;
@@ -755,8 +755,12 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
   }
   const query = request.query as { user?: string; ticket?: string };
   const authenticated = await sessionUser(requestHeaders(request));
-  const ticketUserId = query.ticket
-    ? consumeWsTicket(query.ticket, config.authSecret)
+  const suppliedTicket = websocketTicketFromProtocols(
+    request.headers["sec-websocket-protocol"],
+    query.ticket
+  );
+  const ticketUserId = suppliedTicket
+    ? consumeWsTicket(suppliedTicket, config.authSecret)
     : null;
   if (authenticated && ticketUserId && authenticated.id !== ticketUserId) {
     clientSocket.close(1008, "Authentication mismatch");

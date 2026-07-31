@@ -755,7 +755,10 @@ function ChatPage() {
         setState("connection-error");
         return;
       }
-      const socket = new WebSocket(`${protocol}://${location.host}/ws/v1?ticket=${encodeURIComponent(ticketData.ticket)}`);
+      const socket = new WebSocket(
+        `${protocol}://${location.host}/ws/v1`,
+        ["nexocam-v1", ticketData.ticket]
+      );
       closingSocketRef.current = false;
       socketRef.current = socket;
       socket.addEventListener("open", () => {

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { consumeWsTicket, createWsTicket, resetConsumedWsTickets } from "./ws-ticket.js";
+import {
+  consumeWsTicket,
+  createWsTicket,
+  resetConsumedWsTickets,
+  websocketTicketFromProtocols
+} from "./ws-ticket.js";
 
 const secret = "test-secret-with-enough-entropy-for-hmac";
 
@@ -19,5 +24,13 @@ describe("WebSocket authentication tickets", () => {
 
     expect(consumeWsTicket(ticket, secret, 31_001)).toBeNull();
     expect(consumeWsTicket(modified, secret, 2_000)).toBeNull();
+  });
+
+  it("reads the ticket from the WebSocket subprotocol header", () => {
+    expect(websocketTicketFromProtocols(
+      "nexocam-v1, signed-ticket",
+      "query-ticket"
+    )).toBe("signed-ticket");
+    expect(websocketTicketFromProtocols(undefined, "query-ticket")).toBe("query-ticket");
   });
 });

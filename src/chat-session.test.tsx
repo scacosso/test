@@ -12,10 +12,12 @@ class PendingWebSocket {
   readonly OPEN = 1;
   readonly CLOSED = 3;
   static lastUrl = "";
+  static lastProtocols: string[] = [];
   readyState = PendingWebSocket.CONNECTING;
 
-  constructor(url: string) {
+  constructor(url: string, protocols: string[]) {
     PendingWebSocket.lastUrl = url;
+    PendingWebSocket.lastProtocols = protocols;
   }
 
   addEventListener() {}
@@ -34,6 +36,7 @@ const cameraStream = {
 beforeEach(() => {
   window.history.pushState({}, "", "/chat");
   PendingWebSocket.lastUrl = "";
+  PendingWebSocket.lastProtocols = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/chat/ws-ticket") {
@@ -81,7 +84,8 @@ describe("real chat entry", () => {
     });
 
     expect(screen.getByText(/buscando una persona|looking for someone/i)).toBeVisible();
-    await waitFor(() => expect(PendingWebSocket.lastUrl).toContain("/ws/v1?ticket=short-lived-ticket"));
+    await waitFor(() => expect(PendingWebSocket.lastUrl).toContain("/ws/v1"));
+    expect(PendingWebSocket.lastProtocols).toEqual(["nexocam-v1", "short-lived-ticket"]);
     expect(fetch).toHaveBeenCalledWith("/api/chat/ws-ticket", expect.objectContaining({
       method: "POST",
       credentials: "include"
