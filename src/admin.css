@@ -577,35 +577,43 @@
 .live-room-card code { color: #6d8085; font: 8px/1 "Inter", sans-serif; }
 .live-room-card__pulse { display: inline-flex; align-items: center; gap: 6px; color: #147551; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .live-room-card__pulse i { width: 7px; height: 7px; border-radius: 50%; background: #2abc7a; box-shadow: 0 0 0 4px #e5f7ed; }
-.live-room-card__video {
-  min-height: 142px;
+.live-room-card__pulse.is-busy { color: #8b6a18; }
+.live-room-card__pulse.is-busy i { background: #eab849; box-shadow: 0 0 0 4px #fff2cf; }
+.connected-user-preview {
+  min-height: 156px;
+  aspect-ratio: 16 / 9;
   margin: 12px 0;
-  padding: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
   position: relative;
   overflow: hidden;
-  color: #d9efed;
+  display: grid;
+  place-items: center;
+  color: #8ecbc4;
   border-radius: 7px;
   background:
     radial-gradient(circle at 82% 18%, rgba(85, 213, 194, .24), transparent 32%),
     linear-gradient(145deg, #07303d, #0d4752);
 }
-.live-user-card__avatar { width: 52px; height: 52px; flex: 0 0 auto; display: grid; place-items: center; color: #84d8ce; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; background: rgba(2, 24, 32, .35); }
-.live-user-card__avatar svg { font-size: 43px; }
-.live-room-card__video > div { min-width: 0; display: grid; gap: 5px; }
-.live-room-card__video > div strong { overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.live-room-card__video > div small { overflow: hidden; color: #97babd; text-overflow: ellipsis; white-space: nowrap; font-size: 7px; }
-.live-user-card__camera { position: absolute; right: 9px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; color: #bdeae4; font-size: 7px; font-weight: 700; text-transform: uppercase; }
-.live-user-card__camera svg { font-size: 13px; }
+.connected-user-preview > video { width: 100%; height: 100%; position: absolute; inset: 0; display: block; object-fit: cover; background: #082f3a; }
+.connected-user-preview__state { position: relative; z-index: 1; display: grid; place-items: center; gap: 8px; color: #aed8d5; font-size: 9px; }
+.connected-user-preview__state svg { font-size: 28px; }
+.connected-user-preview__live { padding: 4px 6px; position: absolute; z-index: 2; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; color: #fff; border-radius: 4px; background: rgba(2, 24, 32, .72); font-size: 7px; font-weight: 700; }
+.connected-user-preview__live i { width: 6px; height: 6px; border-radius: 50%; background: #39d58a; }
+.live-user-card__identity { min-width: 0; margin-bottom: 12px; display: flex; align-items: center; gap: 9px; }
+.live-user-card__identity > span { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; color: #4e777d; border-radius: 50%; background: #e8f2f1; }
+.live-user-card__identity > span svg { font-size: 26px; }
+.live-user-card__identity > div { min-width: 0; display: grid; gap: 3px; }
+.live-user-card__identity strong,
+.live-user-card__identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-user-card__identity strong { color: var(--admin-ink); font-size: 10px; }
+.live-user-card__identity small { color: #7c8e92; font-size: 8px; }
 .live-room-card dl { margin: 0 0 13px; display: grid; gap: 8px; }
 .live-room-card dl div { min-width: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
 .live-room-card dt { color: #7d8e92; font-size: 8px; }
 .live-room-card dd { margin: 0; overflow: hidden; color: var(--admin-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; text-align: right; }
 .live-user-card__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.live-user-card__actions.is-single { grid-template-columns: 1fr; }
 .live-user-card__actions .admin-button { min-width: 0; width: 100%; padding-inline: 10px; }
+.live-user-card__actions .admin-button:disabled { color: #819095; border-color: #dce3e2; background: #edf1f1; }
 
 .admin-modal-backdrop,
 .live-review-overlay {
@@ -998,7 +1006,7 @@
   .monitoring-chart { min-height: 210px; }
   .live-review-toolbar__status { width: 100%; justify-content: space-between; }
   .live-room-grid { padding: 12px; grid-template-columns: 1fr; }
-  .live-room-card__video { min-height: 145px; }
+  .connected-user-preview { min-height: 178px; }
   .live-review-overlay > header { align-items: flex-start; }
   .live-review-overlay > header > div { grid-template-columns: auto minmax(0, 1fr); }
   .live-review-overlay > header .admin-button { min-width: 40px; padding: 0 10px; font-size: 0; }

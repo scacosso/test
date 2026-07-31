@@ -20,6 +20,13 @@ type ConnectOptions = {
   url: string;
 };
 
+type PreviewPublisherOptions = {
+  onDisconnected: () => void;
+  stream: MediaStream;
+  token: string;
+  url: string;
+};
+
 export async function connectLiveKitSession({
   elements,
   events,
@@ -79,4 +86,32 @@ export async function connectLiveKitSession({
 
 export async function disconnectLiveKitSession(room: LiveKitRoom | null) {
   if (room) await room.disconnect(false);
+}
+
+export async function connectPreviewPublisherSession({
+  onDisconnected,
+  stream,
+  token,
+  url
+}: PreviewPublisherOptions): Promise<LiveKitRoom> {
+  const { Room, RoomEvent, Track } = await import("livekit-client");
+  const room = new Room({
+    adaptiveStream: false,
+    dynacast: true,
+    stopLocalTrackOnUnpublish: false
+  });
+  room.on(RoomEvent.Disconnected, onDisconnected);
+  try {
+    await room.connect(url, token);
+    const cameraTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
+    if (!cameraTrack) throw new Error("Camera track is not available for preview.");
+    await room.localParticipant.publishTrack(cameraTrack, {
+      source: Track.Source.Camera,
+      simulcast: true
+    });
+    return room;
+  } catch (error) {
+    await room.disconnect(false);
+    throw error;
+  }
 }

@@ -76,11 +76,11 @@ describe("super admin console", () => {
 
     expect(await screen.findByRole("heading", { name: "Gobernanza de la plataforma" })).toBeVisible();
     expect(await screen.findByText("Control de funciones de la plataforma")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Usuarios/ })).toBeVisible();
+    expect(screen.getByRole("link", { name: /^Usuarios$/ })).toBeVisible();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/me", expect.any(Object)));
-  });
+  }, 15_000);
 
-  it("lists every active participant and offers preview or two-way connection", async () => {
+  it("lists camera-connected users independently from rooms and only connects available users", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/admin/me")) {
@@ -89,19 +89,31 @@ describe("super admin console", () => {
           permissions: ["live:read", "live:review"]
         }), { status: 200 });
       }
-      if (url.endsWith("/api/admin/live/rooms")) {
+      if (url.endsWith("/api/admin/live/users")) {
         return new Response(JSON.stringify({
           generatedAt: new Date().toISOString(),
-          rooms: [{
-            sessionId: "166660c9-fae0-4a50-9731-f3a1cb301f85",
-            startedAt: new Date().toISOString(),
-            participantCount: 2,
-            activeReviewCount: 0,
-            users: [
-              { id: "user-a", email: "a@example.com" },
-              { id: "user-b", email: "b@example.com" }
-            ]
-          }]
+          users: [
+            {
+              id: "user-a",
+              email: "a@example.com",
+              name: "Ana",
+              role: "user",
+              isGuest: false,
+              connectedAt: new Date().toISOString(),
+              status: "searching",
+              previewReady: false
+            },
+            {
+              id: "user-b",
+              email: "b@example.com",
+              name: "Bruno",
+              role: "user",
+              isGuest: false,
+              connectedAt: new Date().toISOString(),
+              status: "in_call",
+              previewReady: false
+            }
+          ]
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
@@ -116,16 +128,13 @@ describe("super admin console", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Usuarios conectados" })).toBeVisible();
-    expect(screen.getAllByText("a@example.com").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("a@example.com")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("b@example.com").length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /Vista previa/ })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: /Conectar/ })).toHaveLength(2);
-    screen.getAllByRole("button", { name: /Vista previa/ })[0].click();
-    expect(await screen.findByRole("heading", { name: "Justificación de la revisión" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /Iniciar revisión/ })).toBeDisabled();
-    screen.getByText("Cancelar", { selector: "button.admin-button" }).click();
-    screen.getAllByRole("button", { name: /Conectar/ })[0].click();
-    expect(await screen.findByRole("heading", { name: "Justificación de la conexión" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /Entrar a la sala/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Vista previa/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Conectar$/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Esperar a que finalice/ })).toBeDisabled();
+    screen.getByRole("button", { name: /^Conectar$/ }).click();
+    expect(await screen.findByRole("heading", { name: /Justificaci.n de la conexi.n/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Crear sala y conectar/ })).toBeDisabled();
   });
 });

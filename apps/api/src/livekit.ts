@@ -7,6 +7,28 @@ const roomService = config.livekitApiKey && config.livekitApiSecret
 
 export type LiveReviewMode = "observe" | "connect";
 
+export function userPreviewPublisherGrant(roomName: string) {
+  return {
+    room: roomName,
+    roomJoin: true,
+    canPublish: true,
+    canSubscribe: false,
+    canPublishData: false,
+    hidden: true
+  };
+}
+
+export function userPreviewSubscriberGrant(roomName: string) {
+  return {
+    room: roomName,
+    roomJoin: true,
+    canPublish: false,
+    canSubscribe: true,
+    canPublishData: false,
+    hidden: true
+  };
+}
+
 export function liveReviewGrant(mode: LiveReviewMode, roomName: string) {
   const interactive = mode === "connect";
   return {
@@ -38,6 +60,39 @@ export async function prepareRoom(roomName: string, identities: string[]) {
     });
     return { identity, token: await token.toJwt() };
   }));
+}
+
+export async function prepareUserPreviewRoom(roomName: string, userId: string) {
+  if (!config.livekitApiKey || !config.livekitApiSecret) {
+    return { roomName, token: `demo-preview-${userId}` };
+  }
+  await roomService?.createRoom({ name: roomName, maxParticipants: 4, emptyTimeout: 60 });
+  const token = new AccessToken(config.livekitApiKey, config.livekitApiSecret, {
+    identity: userId,
+    name: "NexoCam camera preview",
+    metadata: JSON.stringify({ service: "user-preview", userId }),
+    ttl: "30m"
+  });
+  token.addGrant(userPreviewPublisherGrant(roomName));
+  return { roomName, token: await token.toJwt() };
+}
+
+export async function createUserPreviewSubscriberToken(
+  roomName: string,
+  identity: string,
+  targetUserId: string
+) {
+  if (!config.livekitApiKey || !config.livekitApiSecret) {
+    throw new Error("LiveKit credentials are required for camera preview.");
+  }
+  const token = new AccessToken(config.livekitApiKey, config.livekitApiSecret, {
+    identity,
+    name: "NexoCam super admin preview",
+    metadata: JSON.stringify({ service: "admin-user-preview", targetUserId }),
+    ttl: "90s"
+  });
+  token.addGrant(userPreviewSubscriberGrant(roomName));
+  return token.toJwt();
 }
 
 export async function createLiveReviewToken(

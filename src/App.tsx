@@ -38,7 +38,11 @@ import {
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AdminConsole } from "./admin";
 import { getBrowserSession, hasActiveSession, signOutBrowserSession } from "./auth-client";
-import { connectLiveKitSession, disconnectLiveKitSession } from "./livekit-session";
+import {
+  connectLiveKitSession,
+  connectPreviewPublisherSession,
+  disconnectLiveKitSession
+} from "./livekit-session";
 
 type Locale = "es" | "en";
 type ChatState =
@@ -623,6 +627,7 @@ function ChatPage() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const roomRef = useRef<import("livekit-client").Room | null>(null);
+  const previewRoomRef = useRef<import("livekit-client").Room | null>(null);
   const connectionGenerationRef = useRef(0);
   const closingSocketRef = useRef(false);
   const pendingIncidentRef = useRef<{ requestId: string; kind: "reported" | "blocked" } | null>(null);
@@ -797,6 +802,31 @@ function ChatPage() {
             setState("connection-error");
           }
         }
+        if (message.type === "presence.preview") {
+          const stream = mediaStreamRef.current;
+          if (!stream || !message.payload.livekitUrl || !message.payload.token) return;
+          const previousPreview = previewRoomRef.current;
+          previewRoomRef.current = null;
+          await disconnectLiveKitSession(previousPreview);
+          try {
+            let presenceRoom: import("livekit-client").Room | null = null;
+            presenceRoom = await connectPreviewPublisherSession({
+              url: message.payload.livekitUrl,
+              token: message.payload.token,
+              stream,
+              onDisconnected: () => {
+                if (previewRoomRef.current === presenceRoom) {
+                  previewRoomRef.current = null;
+                  sendEnvelope("presence.preview.unavailable");
+                }
+              }
+            });
+            previewRoomRef.current = presenceRoom;
+            sendEnvelope("presence.preview.ready");
+          } catch {
+            sendEnvelope("presence.preview.unavailable");
+          }
+        }
         if (message.type === "queue.state" && message.payload.state === "searching") setState("searching");
         if (message.type === "chat.message") setMessages((items) => [...items, { mine: false, text: message.payload.text }]);
         if (message.type === "session.peerLeft") {
@@ -859,7 +889,10 @@ function ChatPage() {
     socketRef.current?.close();
     const room = roomRef.current;
     roomRef.current = null;
+    const previewRoom = previewRoomRef.current;
+    previewRoomRef.current = null;
     void disconnectLiveKitSession(room);
+    void disconnectLiveKitSession(previewRoom);
   }, []);
 
   const submitMessage = (event: FormEvent) => {

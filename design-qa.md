@@ -90,20 +90,22 @@ final result: passed
 - Source visual truth: `design/reference-superadmin-option-3.png`
 - Implementation: `/admin/live`
 - Viewports: 1440 x 1024 and 390 x 844
-- State: authenticated superuser, two active rooms, four connected users, individual preview action, and bidirectional connection action
+- State: authenticated superuser and four WebSocket-connected users in searching, available, connecting, and active-call states
 
 ## Browser evidence
 
-- Each active participant is represented by an individual card instead of a room-level aggregate.
-- `Vista previa` opens only the selected participant stream with a hidden, subscribe-only, 90-second LiveKit token.
-- `Conectar` joins the active room as a visible superuser participant, publishes camera and microphone, exposes local mute controls, and expires after five minutes.
-- Both actions require a reason and record start and end events in the administrative audit log.
-- Desktop and mobile render without horizontal overflow; mobile cards and actions stack without clipping.
+- Every connected user has an individual card independent of random-chat rooms.
+- Visible cards automatically request a short-lived, camera-only LiveKit presence preview; cards outside the viewport release their subscriber session.
+- `Conectar` is available only when the target is not already connecting or in a call. It requires a reason, removes a queued target atomically, and creates a new dedicated superadmin-user room.
+- The connection publishes the superadmin camera and microphone and exposes local mute controls. Closing it ends the dedicated room without affecting any unrelated call.
+- Preview and connection access are superuser-only and their start, expiry, and end are recorded in the administrative audit log.
+- Desktop and mobile render without horizontal overflow; mobile cards and controls stack without clipping.
+- The confirmation dialog keeps its primary action disabled until a valid reason is entered.
 - Browser console errors: none.
 
 ## Intentional behavior
 
-`Conectar` joins the selected user's active LiveKit room. If the room already has a peer, both existing participants can receive the visible superuser stream; it does not move the selected user into a separate private room.
+The camera presence channel is separate from random matchmaking. Users already in a call are shown as busy and are never interrupted. Browser QA used intercepted administrative data and therefore exercised preview loading states; the actual LiveKit camera publication, video-only grant, and subscription path are covered by unit and build verification and require a deployed LiveKit instance for final media validation.
 
 ## Findings
 

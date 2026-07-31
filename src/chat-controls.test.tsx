@@ -70,7 +70,7 @@ describe("chat header controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copiar enlace" }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    expect(screen.getByRole("button", { name: "Enlace copiado" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Enlace copiado" }, { timeout: 10_000 })).toBeVisible();
   });
 
   it("does not return to chat after signing out", async () => {

@@ -9,6 +9,8 @@ export const clientEventTypes = [
   "chat.send",
   "session.report",
   "session.block",
+  "presence.preview.ready",
+  "presence.preview.unavailable",
   "heartbeat"
 ] as const;
 
@@ -20,6 +22,7 @@ export const serverEventTypes = [
   "moderation.warning",
   "account.sanctioned",
   "chat.message",
+  "presence.preview",
   "error"
 ] as const;
 

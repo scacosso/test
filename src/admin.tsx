@@ -49,6 +49,7 @@ import { signOutBrowserSession } from "./auth-client";
 import type { LiveReviewConnection } from "./admin-live-review";
 
 const AdminLiveReviewViewer = lazy(() => import("./admin-live-review"));
+const AdminUserPreview = lazy(() => import("./admin-user-preview"));
 
 export type AdminLocale = "es" | "en";
 type Role = "user" | "moderator" | "admin" | "superuser";
@@ -109,20 +110,15 @@ type Monitoring = {
   }>;
 };
 
-type LiveRoomUser = string | { id: string; email: string | null };
-
-type LiveRoom = {
-  sessionId: string;
-  startedAt: string;
-  participantCount: number;
-  activeReviewCount?: number;
-  users: LiveRoomUser[];
-};
-
-type SelectedLiveUser = {
-  room: LiveRoom;
-  user: LiveRoomUser;
-  mode: "observe" | "connect";
+type ConnectedLiveUser = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  role: string;
+  isGuest: boolean;
+  connectedAt: string;
+  status: "online" | "searching" | "connecting" | "in_call";
+  previewReady: boolean;
 };
 
 type AuditEntry = {
@@ -221,7 +217,7 @@ const adminCopy = {
       features: "Funciones",
       users: "Usuarios",
       reports: "Reportes",
-      live: "Salas en vivo",
+      live: "Usuarios en vivo",
       sanctions: "Sanciones",
       monitoring: "Monitoreo",
       audit: "Auditoría"
@@ -231,7 +227,7 @@ const adminCopy = {
       features: "Funciones de la plataforma",
       users: "Usuarios y permisos",
       reports: "Reportes e incidentes",
-      liveRooms: "Revisión de salas en vivo",
+      liveRooms: "Usuarios conectados",
       sanctions: "Sanciones",
       monitoring: "Monitoreo operativo",
       audit: "Auditoría",
@@ -326,28 +322,26 @@ const adminCopy = {
     },
     liveReview: {
       title: "Usuarios conectados",
-      description: "Vista previa individual o conexión directa a la sala activa, disponible solo para superusuarios.",
+      description: "Cámaras disponibles antes del match. Conecta creando una sala nueva sin entrar en conversaciones existentes.",
       updated: "Última actualización",
       user: "Usuario",
-      room: "Sala",
-      participants: "Participantes",
-      started: "Inicio",
-      activeReviews: "Revisiones activas",
-      observe: "Vista previa",
+      connectedAt: "Conectado desde",
+      status: "Estado",
+      online: "Disponible",
+      searching: "Buscando",
+      connecting: "Conectando",
+      inCall: "En llamada",
+      cameraStarting: "Activando cámara",
       connect: "Conectar",
-      empty: "No hay usuarios en salas activas en este momento.",
-      reasonTitle: "Justificación de la revisión",
-      reasonBody: "Escribe el motivo operativo antes de abrir la transmisión. El inicio y el cierre quedarán auditados.",
+      busy: "Esperar a que finalice",
+      empty: "No hay usuarios con cámara conectados en este momento.",
       connectReasonTitle: "Justificación de la conexión",
-      connectReasonBody: "Escribe el motivo antes de entrar con tu cámara y micrófono a la sala del usuario. El inicio y el cierre quedarán auditados.",
-      reasonPlaceholder: "Ej.: revisión de una alerta de seguridad",
-      start: "Iniciar revisión",
-      startConnection: "Entrar a la sala",
-      close: "Cerrar revisión",
+      connectReasonBody: "Se creará una sala nueva entre el superadmin y este usuario. No se interrumpirá una llamada existente.",
+      reasonPlaceholder: "Ej.: asistencia directa solicitada",
+      startConnection: "Crear sala y conectar",
       closeConnection: "Salir de la sala",
       expires: "Acceso temporal hasta",
-      noRecording: "Solo suscripción · sin grabación · token de 90 segundos",
-      connectionMedia: "Conexión bidireccional · cámara y micrófono · máximo 5 minutos",
+      connectionMedia: "Sala dedicada · cámara y micrófono · máximo 5 minutos",
       disconnected: "La vista en vivo terminó y el participante superusuario fue desconectado."
     },
     sanctions: {
@@ -391,7 +385,7 @@ const adminCopy = {
       features: "Features",
       users: "Users",
       reports: "Reports",
-      live: "Live rooms",
+      live: "Live users",
       sanctions: "Sanctions",
       monitoring: "Monitoring",
       audit: "Audit"
@@ -401,7 +395,7 @@ const adminCopy = {
       features: "Platform features",
       users: "Users and permissions",
       reports: "Reports and incidents",
-      liveRooms: "Live room review",
+      liveRooms: "Connected users",
       sanctions: "Sanctions",
       monitoring: "Operational monitoring",
       audit: "Audit",
@@ -496,28 +490,26 @@ const adminCopy = {
     },
     liveReview: {
       title: "Connected users",
-      description: "Individual preview or direct connection to the active room, available only to superusers.",
+      description: "Camera presence before matching. Connect by creating a new room without entering existing conversations.",
       updated: "Last updated",
       user: "User",
-      room: "Room",
-      participants: "Participants",
-      started: "Started",
-      activeReviews: "Active reviews",
-      observe: "Live preview",
+      connectedAt: "Connected since",
+      status: "Status",
+      online: "Available",
+      searching: "Searching",
+      connecting: "Connecting",
+      inCall: "In a call",
+      cameraStarting: "Starting camera",
       connect: "Connect",
-      empty: "There are no users in active rooms right now.",
-      reasonTitle: "Review justification",
-      reasonBody: "Enter the operational reason before opening the stream. The start and end will be audited.",
+      busy: "Wait until available",
+      empty: "There are no camera-connected users right now.",
       connectReasonTitle: "Connection justification",
-      connectReasonBody: "Enter the reason before joining the user's room with your camera and microphone. The start and end will be audited.",
-      reasonPlaceholder: "Example: reviewing a safety alert",
-      start: "Start review",
-      startConnection: "Join room",
-      close: "Close review",
+      connectReasonBody: "A new room will be created between the super admin and this user. An existing call will not be interrupted.",
+      reasonPlaceholder: "Example: requested direct assistance",
+      startConnection: "Create room and connect",
       closeConnection: "Leave room",
       expires: "Temporary access until",
-      noRecording: "Subscribe only · no recording · 90-second token",
-      connectionMedia: "Two-way connection · camera and microphone · maximum 5 minutes",
+      connectionMedia: "Dedicated room · camera and microphone · maximum 5 minutes",
       disconnected: "The live view ended and the superuser participant was disconnected."
     },
     sanctions: {
@@ -1423,9 +1415,9 @@ function MonitoringPage({ locale }: { locale: AdminLocale }) {
 
 function LiveReviewPage({ locale }: { locale: AdminLocale }) {
   const t = adminCopy[locale];
-  const [rooms, setRooms] = useState<LiveRoom[]>([]);
+  const [users, setUsers] = useState<ConnectedLiveUser[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
-  const [selected, setSelected] = useState<SelectedLiveUser | null>(null);
+  const [selected, setSelected] = useState<ConnectedLiveUser | null>(null);
   const [reason, setReason] = useState("");
   const [connection, setConnection] = useState<LiveReviewConnection | null>(null);
   const connectionRef = useRef<LiveReviewConnection | null>(null);
@@ -1435,8 +1427,8 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
 
   const load = useCallback(async () => {
     try {
-      const result = await adminRequest<{ generatedAt: string; rooms: LiveRoom[] }>("/api/admin/live/rooms");
-      setRooms(result.rooms);
+      const result = await adminRequest<{ generatedAt: string; users: ConnectedLiveUser[] }>("/api/admin/live/users");
+      setUsers(result.users);
       setGeneratedAt(result.generatedAt);
       setState("ready");
     } catch {
@@ -1452,7 +1444,7 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  const finishReview = useCallback(async (
+  const finishConnection = useCallback(async (
     endReason: "viewer_closed" | "viewer_disconnected" | "token_expired"
   ) => {
     const current = connectionRef.current;
@@ -1460,7 +1452,7 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     connectionRef.current = null;
     setConnection(null);
     try {
-      await adminRequest(`/api/admin/live/reviews/${current.reviewId}/end`, {
+      await adminRequest(`/api/admin/live/access/${current.accessId}/end`, {
         method: "POST",
         body: JSON.stringify({ endReason })
       });
@@ -1476,7 +1468,7 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
       const current = connectionRef.current;
       if (!current) return;
       connectionRef.current = null;
-      void fetch(`/api/admin/live/reviews/${current.reviewId}/end`, {
+      void fetch(`/api/admin/live/access/${current.accessId}/end`, {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json", accept: "application/json" },
@@ -1491,48 +1483,44 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     };
   }, []);
 
-  const startReview = async (event: FormEvent<HTMLFormElement>) => {
+  const startConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selected || reason.trim().length < 3) return;
     setStarting(true);
     setMessage(null);
     try {
       const result = await adminRequest<LiveReviewConnection>(
-        `/api/admin/live/rooms/${selected.room.sessionId}/reviews`,
+        `/api/admin/live/users/${encodeURIComponent(selected.id)}/connect`,
         {
           method: "POST",
-          body: JSON.stringify({
-            reason: reason.trim(),
-            mode: selected.mode,
-            targetUserId: accountId(selected.user)
-          })
+          body: JSON.stringify({ reason: reason.trim() })
         }
       );
       connectionRef.current = result;
       setConnection(result);
       setSelected(null);
       setReason("");
-    } catch {
-      setMessage(t.common.error);
+    } catch (error) {
+      setMessage(error instanceof AdminApiError && error.code === "user_busy"
+        ? t.liveReview.busy
+        : t.common.error);
     } finally {
       setStarting(false);
     }
   };
 
-  const accountId = (user: LiveRoomUser) => {
-    if (typeof user === "string") return user;
-    return user.id;
-  };
-
-  const accountLabel = (user: LiveRoomUser) => {
-    if (typeof user === "string") return user;
-    return user.email ?? user.id;
-  };
-
-  const liveUsers = rooms.flatMap((room) => room.users.map((user) => ({ room, user })));
   const connectionUser = connection
-    ? liveUsers.find(({ user }) => accountId(user) === connection.targetUserId)?.user
+    ? users.find((user) => user.id === connection.targetUserId)
     : null;
+  const accountLabel = (user: ConnectedLiveUser) => user.name || user.email || (user.isGuest
+    ? (locale === "es" ? "Invitado" : "Guest")
+    : user.id);
+  const statusLabel = (user: ConnectedLiveUser) => {
+    if (user.status === "in_call") return t.liveReview.inCall;
+    if (user.status === "connecting") return t.liveReview.connecting;
+    if (user.status === "searching") return t.liveReview.searching;
+    return t.liveReview.online;
+  };
 
   if (state === "loading") {
     return <PageState title={t.common.loading} icon={<ArrowClockwise className="spin" />} />;
@@ -1555,48 +1543,41 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
       {message ? <div className="admin-status admin-status--success"><CheckCircle />{message}</div> : null}
       {state === "error" ? (
         <PageState title={t.common.error} icon={<Warning />} action={<button className="admin-button admin-button--primary" onClick={() => void load()}>{t.common.retry}</button>} />
-      ) : liveUsers.length === 0 ? (
+      ) : users.length === 0 ? (
         <PageState title={t.liveReview.empty} icon={<VideoCamera />} />
       ) : (
         <div className="live-room-grid">
-          {liveUsers.map(({ room, user }) => (
-            <article className="live-room-card live-user-card" key={`${room.sessionId}:${accountId(user)}`}>
+          {users.map((user) => {
+            const busy = user.status === "in_call" || user.status === "connecting";
+            return (
+            <article className="live-room-card live-user-card" key={user.id}>
               <header>
-                <span className="live-room-card__pulse"><i />{t.header.live}</span>
-                <code>{room.sessionId.slice(0, 8)}</code>
+                <span className={`live-room-card__pulse${busy ? " is-busy" : ""}`}><i />{statusLabel(user)}</span>
+                <code>{user.id.slice(0, 8)}</code>
               </header>
-              <div className="live-room-card__video">
-                <span className="live-user-card__avatar"><UserCircle weight="duotone" /></span>
-                <div>
-                  <strong>{accountLabel(user)}</strong>
-                  <small>{accountId(user)}</small>
-                </div>
-                <span className="live-user-card__camera"><VideoCamera />{t.header.live}</span>
+              <Suspense fallback={<div className="connected-user-preview"><SpinnerGap className="spin" /></div>}>
+                <AdminUserPreview locale={locale} previewReady={user.previewReady} userId={user.id} />
+              </Suspense>
+              <div className="live-user-card__identity">
+                <span><UserCircle weight="duotone" /></span>
+                <div><strong>{accountLabel(user)}</strong><small>{user.email ?? user.id}</small></div>
               </div>
               <dl>
                 <div><dt>{t.liveReview.user}</dt><dd>{accountLabel(user)}</dd></div>
-                <div><dt>{t.liveReview.room}</dt><dd>{room.sessionId.slice(0, 8)}</dd></div>
-                <div><dt>{t.liveReview.started}</dt><dd>{formatDate(room.startedAt, locale)}</dd></div>
-                <div><dt>{t.liveReview.activeReviews}</dt><dd>{room.activeReviewCount ?? 0}</dd></div>
+                <div><dt>{t.liveReview.connectedAt}</dt><dd>{formatDate(user.connectedAt, locale)}</dd></div>
+                <div><dt>{t.liveReview.status}</dt><dd>{statusLabel(user)}</dd></div>
               </dl>
-              <div className="live-user-card__actions">
-                <button className="admin-button admin-button--ghost" onClick={() => {
-                  setSelected({ room, user, mode: "observe" });
+              <div className="live-user-card__actions is-single">
+                <button className="admin-button admin-button--primary" disabled={busy} onClick={() => {
+                  setSelected(user);
                   setReason("");
                   setMessage(null);
                 }}>
-                  <Eye />{t.liveReview.observe}
-                </button>
-                <button className="admin-button admin-button--primary" onClick={() => {
-                  setSelected({ room, user, mode: "connect" });
-                  setReason("");
-                  setMessage(null);
-                }}>
-                  <VideoCamera />{t.liveReview.connect}
+                  <VideoCamera />{busy ? t.liveReview.busy : t.liveReview.connect}
                 </button>
               </div>
             </article>
-          ))}
+          );})}
         </div>
       )}
 
@@ -1607,15 +1588,13 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
           <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="live-review-reason-title">
             <header>
               <div>
-                <span>{selected.mode === "connect" ? <VideoCamera /> : <ShieldCheck />}</span>
-                <h2 id="live-review-reason-title">
-                  {selected.mode === "connect" ? t.liveReview.connectReasonTitle : t.liveReview.reasonTitle}
-                </h2>
+                <span><VideoCamera /></span>
+                <h2 id="live-review-reason-title">{t.liveReview.connectReasonTitle}</h2>
               </div>
               <button className="icon-button" onClick={() => setSelected(null)} aria-label={t.common.cancel}><X /></button>
             </header>
-            <p>{selected.mode === "connect" ? t.liveReview.connectReasonBody : t.liveReview.reasonBody}</p>
-            <form onSubmit={startReview}>
+            <p>{t.liveReview.connectReasonBody}</p>
+            <form onSubmit={startConnection}>
               <textarea
                 autoFocus
                 value={reason}
@@ -1625,12 +1604,12 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
                 minLength={3}
                 maxLength={500}
               />
-              <small>{selected.mode === "connect" ? t.liveReview.connectionMedia : t.liveReview.noRecording}</small>
+              <small>{t.liveReview.connectionMedia}</small>
               <div>
                 <button type="button" className="admin-button admin-button--ghost" onClick={() => setSelected(null)}>{t.common.cancel}</button>
                 <button className="admin-button admin-button--primary" disabled={starting || reason.trim().length < 3}>
-                  {starting ? <SpinnerGap className="spin" /> : selected.mode === "connect" ? <VideoCamera /> : <Eye />}
-                  {selected.mode === "connect" ? t.liveReview.startConnection : t.liveReview.start}
+                  {starting ? <SpinnerGap className="spin" /> : <VideoCamera />}
+                  {t.liveReview.startConnection}
                 </button>
               </div>
             </form>
@@ -1644,22 +1623,22 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
             <div>
               <span className="live-room-card__pulse"><i />{t.header.live}</span>
               <strong>
-                {connection.mode === "connect" ? t.liveReview.connect : t.liveReview.observe}
+                {t.liveReview.connect}
                 {" · "}
                 {connectionUser ? accountLabel(connectionUser) : connection.targetUserId}
               </strong>
               <small>{t.liveReview.expires}: {formatDate(connection.expiresAt, locale)}</small>
             </div>
-            <button className="admin-button admin-button--primary" onClick={() => void finishReview("viewer_closed")}>
-              <X />{connection.mode === "connect" ? t.liveReview.closeConnection : t.liveReview.close}
+            <button className="admin-button admin-button--primary" onClick={() => void finishConnection("viewer_closed")}>
+              <X />{t.liveReview.closeConnection}
             </button>
           </header>
           <Suspense fallback={<PageState title={t.common.loading} icon={<SpinnerGap className="spin" />} />}>
-            <AdminLiveReviewViewer connection={connection} locale={locale} onEnded={finishReview} />
+            <AdminLiveReviewViewer connection={connection} locale={locale} onEnded={finishConnection} />
           </Suspense>
           <footer>
             <ShieldCheck />
-            {connection.mode === "connect" ? t.liveReview.connectionMedia : t.liveReview.noRecording}
+            {t.liveReview.connectionMedia}
           </footer>
         </div>
       ) : null}

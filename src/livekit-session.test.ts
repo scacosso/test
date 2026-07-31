@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectLiveKitSession, disconnectLiveKitSession } from "./livekit-session";
+import {
+  connectLiveKitSession,
+  connectPreviewPublisherSession,
+  disconnectLiveKitSession
+} from "./livekit-session";
 
 const liveKitHarness = vi.hoisted(() => ({
   failPublish: false,
@@ -117,5 +121,27 @@ describe("LiveKit browser session", () => {
       }
     })).rejects.toThrow("publish failed");
     expect(liveKitHarness.rooms[0].disconnect).toHaveBeenCalledWith(false);
+  });
+
+  it("publishes only the camera to the independent presence room", async () => {
+    const localVideo = { kind: "video", readyState: "live" };
+    const localAudio = { kind: "audio", readyState: "live" };
+    await connectPreviewPublisherSession({
+      url: "wss://livekit.example.test",
+      token: "preview-token",
+      stream: {
+        getVideoTracks: () => [localVideo],
+        getAudioTracks: () => [localAudio]
+      } as unknown as MediaStream,
+      onDisconnected: vi.fn()
+    });
+
+    const fakeRoom = liveKitHarness.rooms[0];
+    expect(fakeRoom.connect).toHaveBeenCalledWith("wss://livekit.example.test", "preview-token");
+    expect(fakeRoom.localParticipant.publishTrack).toHaveBeenCalledTimes(1);
+    expect(fakeRoom.localParticipant.publishTrack).toHaveBeenCalledWith(localVideo, {
+      source: "camera",
+      simulcast: true
+    });
   });
 });

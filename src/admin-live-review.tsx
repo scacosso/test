@@ -28,12 +28,12 @@ type ReviewTrack = {
 };
 
 export type LiveReviewConnection = {
-  reviewId: string;
+  accessId: string;
   sessionId: string;
   token: string;
   livekitUrl: string;
   expiresAt: string;
-  mode: "observe" | "connect";
+  mode: "connect";
   targetUserId: string;
 };
 
