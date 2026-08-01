@@ -119,7 +119,22 @@ type ConnectedLiveUser = {
   connectedAt: string;
   status: "online" | "searching" | "connecting" | "in_call";
   previewReady: boolean;
+  reservation: AdminReservationView | null;
 };
+
+type AdminReservationView = {
+  reservationId: string;
+  targetUserId: string;
+  status: "waiting" | "connecting" | "connected" | "cancelled" | "expired" | "failed";
+  createdAt: string;
+  expiresAt: string;
+  failureReason: string | null;
+  connection?: LiveReviewConnection;
+};
+
+type StartAdminConnectionResult =
+  | AdminReservationView
+  | { status: "connected"; connection: LiveReviewConnection };
 
 type AuditEntry = {
   id: number;
@@ -334,9 +349,17 @@ const adminCopy = {
       cameraStarting: "Activando cámara",
       connect: "Conectar",
       busy: "Esperar a que finalice",
+      reserveConnection: "Reservar y esperar",
+      waiting: "Esperando que termine su conversación…",
+      cancelReservation: "Cancelar espera",
+      reservationExpires: "Reserva vigente hasta",
+      reservationCancelled: "La espera fue cancelada.",
+      reservationExpired: "La reserva venció antes de que el usuario quedara disponible.",
+      reservationFailed: "No se pudo completar la conexión reservada.",
       empty: "No hay usuarios con cámara conectados en este momento.",
       connectReasonTitle: "Justificación de la conexión",
       connectReasonBody: "Se creará una sala nueva entre el superadmin y este usuario. No se interrumpirá una llamada existente.",
+      waitReasonBody: "El usuario está ocupado. La reserva esperará a que termine y lo conectará antes de que vuelva al emparejamiento aleatorio.",
       reasonPlaceholder: "Ej.: asistencia directa solicitada",
       startConnection: "Crear sala y conectar",
       closeConnection: "Salir de la sala",
@@ -502,9 +525,17 @@ const adminCopy = {
       cameraStarting: "Starting camera",
       connect: "Connect",
       busy: "Wait until available",
+      reserveConnection: "Reserve and wait",
+      waiting: "Waiting for the current conversation to end…",
+      cancelReservation: "Cancel wait",
+      reservationExpires: "Reservation valid until",
+      reservationCancelled: "The wait was cancelled.",
+      reservationExpired: "The reservation expired before the user became available.",
+      reservationFailed: "The reserved connection could not be completed.",
       empty: "There are no camera-connected users right now.",
       connectReasonTitle: "Connection justification",
       connectReasonBody: "A new room will be created between the super admin and this user. An existing call will not be interrupted.",
+      waitReasonBody: "The user is busy. The reservation will wait for the current conversation to end and connect before random matching resumes.",
       reasonPlaceholder: "Example: requested direct assistance",
       startConnection: "Create room and connect",
       closeConnection: "Leave room",
@@ -1421,6 +1452,8 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
   const [reason, setReason] = useState("");
   const [connection, setConnection] = useState<LiveReviewConnection | null>(null);
   const connectionRef = useRef<LiveReviewConnection | null>(null);
+  const [reservation, setReservation] = useState<AdminReservationView | null>(null);
+  const reservationRef = useRef<AdminReservationView | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -1429,6 +1462,13 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     try {
       const result = await adminRequest<{ generatedAt: string; users: ConnectedLiveUser[] }>("/api/admin/live/users");
       setUsers(result.users);
+      const activeReservation = result.users
+        .map((user) => user.reservation)
+        .find((item) => item?.status === "waiting" || item?.status === "connecting") ?? null;
+      if (!reservationRef.current && activeReservation) {
+        reservationRef.current = activeReservation;
+        setReservation(activeReservation);
+      }
       setGeneratedAt(result.generatedAt);
       setState("ready");
     } catch {
@@ -1443,6 +1483,47 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     }, 5_000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    const reservationId = reservation?.reservationId;
+    if (!reservationId || (reservation.status !== "waiting" && reservation.status !== "connecting")) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const result = await adminRequest<AdminReservationView>(
+          `/api/admin/live/reservations/${encodeURIComponent(reservationId)}`
+        );
+        if (!active) return;
+        reservationRef.current = result;
+        setReservation(result);
+        if (result.status === "connected" && result.connection) {
+          reservationRef.current = null;
+          setReservation(null);
+          connectionRef.current = result.connection;
+          setConnection(result.connection);
+          setMessage(null);
+        } else if (result.status === "expired" || result.status === "cancelled" || result.status === "failed") {
+          reservationRef.current = null;
+          setReservation(null);
+          setMessage(result.status === "expired"
+            ? t.liveReview.reservationExpired
+            : result.status === "cancelled"
+              ? t.liveReview.reservationCancelled
+              : t.liveReview.reservationFailed);
+        }
+      } catch {
+        if (active) setMessage(t.common.error);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void poll();
+    }, 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [reservation?.reservationId, reservation?.status, t.common.error, t.liveReview.reservationCancelled, t.liveReview.reservationExpired, t.liveReview.reservationFailed]);
 
   const finishConnection = useCallback(async (
     endReason: "viewer_closed" | "viewer_disconnected" | "token_expired"
@@ -1466,15 +1547,27 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
   useEffect(() => {
     const closeWithoutWaiting = () => {
       const current = connectionRef.current;
-      if (!current) return;
-      connectionRef.current = null;
-      void fetch(`/api/admin/live/access/${current.accessId}/end`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ endReason: "viewer_closed" }),
-        keepalive: true
-      });
+      if (current) {
+        connectionRef.current = null;
+        void fetch(`/api/admin/live/access/${current.accessId}/end`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ endReason: "viewer_closed" }),
+          keepalive: true
+        });
+      }
+      const pending = reservationRef.current;
+      if (pending && (pending.status === "waiting" || pending.status === "connecting")) {
+        reservationRef.current = null;
+        void fetch(`/api/admin/live/reservations/${pending.reservationId}/cancel`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ reason: "viewer_left_page" }),
+          keepalive: true
+        });
+      }
     };
     window.addEventListener("pagehide", closeWithoutWaiting);
     return () => {
@@ -1489,15 +1582,21 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
     setStarting(true);
     setMessage(null);
     try {
-      const result = await adminRequest<LiveReviewConnection>(
+      const result = await adminRequest<StartAdminConnectionResult>(
         `/api/admin/live/users/${encodeURIComponent(selected.id)}/connect`,
         {
           method: "POST",
           body: JSON.stringify({ reason: reason.trim() })
         }
       );
-      connectionRef.current = result;
-      setConnection(result);
+      if ("reservationId" in result) {
+        reservationRef.current = result;
+        setReservation(result);
+        setMessage(null);
+      } else {
+        connectionRef.current = result.connection;
+        setConnection(result.connection);
+      }
       setSelected(null);
       setReason("");
     } catch (error) {
@@ -1506,6 +1605,23 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
         : t.common.error);
     } finally {
       setStarting(false);
+    }
+  };
+
+  const cancelReservation = async () => {
+    const current = reservationRef.current;
+    if (!current) return;
+    try {
+      await adminRequest(`/api/admin/live/reservations/${current.reservationId}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason: "viewer_cancelled" })
+      });
+      reservationRef.current = null;
+      setReservation(null);
+      setMessage(t.liveReview.reservationCancelled);
+      void load();
+    } catch {
+      setMessage(t.common.error);
     }
   };
 
@@ -1541,6 +1657,18 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
         </div>
       </header>
       {message ? <div className="admin-status admin-status--success"><CheckCircle />{message}</div> : null}
+      {reservation ? (
+        <div className="admin-status admin-status--waiting" role="status">
+          <SpinnerGap className="spin" />
+          <div>
+            <strong>{t.liveReview.waiting}</strong>
+            <small>{t.liveReview.reservationExpires}: {formatDate(reservation.expiresAt, locale)}</small>
+          </div>
+          <button className="admin-button admin-button--ghost" disabled={reservation.status === "connecting"} onClick={() => void cancelReservation()}>
+            <X />{t.liveReview.cancelReservation}
+          </button>
+        </div>
+      ) : null}
       {state === "error" ? (
         <PageState title={t.common.error} icon={<Warning />} action={<button className="admin-button admin-button--primary" onClick={() => void load()}>{t.common.retry}</button>} />
       ) : users.length === 0 ? (
@@ -1549,6 +1677,7 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
         <div className="live-room-grid">
           {users.map((user) => {
             const busy = user.status === "in_call" || user.status === "connecting";
+            const userReservation = user.reservation ?? (reservation?.targetUserId === user.id ? reservation : null);
             return (
             <article className="live-room-card live-user-card" key={user.id}>
               <header>
@@ -1567,14 +1696,25 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
                 <div><dt>{t.liveReview.connectedAt}</dt><dd>{formatDate(user.connectedAt, locale)}</dd></div>
                 <div><dt>{t.liveReview.status}</dt><dd>{statusLabel(user)}</dd></div>
               </dl>
-              <div className="live-user-card__actions is-single">
-                <button className="admin-button admin-button--primary" disabled={busy} onClick={() => {
-                  setSelected(user);
-                  setReason("");
-                  setMessage(null);
-                }}>
-                  <VideoCamera />{busy ? t.liveReview.busy : t.liveReview.connect}
-                </button>
+              <div className={`live-user-card__actions${userReservation ? " is-reserved" : " is-single"}`}>
+                {userReservation ? (
+                  <>
+                    <button className="admin-button admin-button--waiting" disabled>
+                      <SpinnerGap className="spin" />{t.liveReview.waiting}
+                    </button>
+                    <button className="admin-button admin-button--ghost" disabled={userReservation.status === "connecting"} onClick={() => void cancelReservation()}>
+                      <X />{t.liveReview.cancelReservation}
+                    </button>
+                  </>
+                ) : (
+                  <button className="admin-button admin-button--primary" onClick={() => {
+                    setSelected(user);
+                    setReason("");
+                    setMessage(null);
+                  }}>
+                    <VideoCamera />{busy ? t.liveReview.busy : t.liveReview.connect}
+                  </button>
+                )}
               </div>
             </article>
           );})}
@@ -1593,7 +1733,9 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
               </div>
               <button className="icon-button" onClick={() => setSelected(null)} aria-label={t.common.cancel}><X /></button>
             </header>
-            <p>{t.liveReview.connectReasonBody}</p>
+            <p>{selected.status === "in_call" || selected.status === "connecting"
+              ? t.liveReview.waitReasonBody
+              : t.liveReview.connectReasonBody}</p>
             <form onSubmit={startConnection}>
               <textarea
                 autoFocus
@@ -1609,7 +1751,9 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
                 <button type="button" className="admin-button admin-button--ghost" onClick={() => setSelected(null)}>{t.common.cancel}</button>
                 <button className="admin-button admin-button--primary" disabled={starting || reason.trim().length < 3}>
                   {starting ? <SpinnerGap className="spin" /> : <VideoCamera />}
-                  {t.liveReview.startConnection}
+                  {selected.status === "in_call" || selected.status === "connecting"
+                    ? t.liveReview.reserveConnection
+                    : t.liveReview.startConnection}
                 </button>
               </div>
             </form>

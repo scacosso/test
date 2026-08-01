@@ -83,6 +83,33 @@ final result: passed
 
 ---
 
+# Super Admin busy-user reservation QA
+
+## Target flow
+
+- Implementation: `/admin/live`
+- Viewports: desktop default and 390 x 844 mobile
+- State: authenticated superuser, one available user, one user in an active random-chat call
+- Flow: select busy user, justify the request, reserve, observe pending state, cancel, and restore the connect action
+
+## Browser evidence
+
+- `Esperar a que finalice` remains actionable while the target is in a call and opens a dedicated justification dialog.
+- Submitting creates a five-minute waiting state with an explicit expiry and cancel action without interrupting the current call.
+- The reserved card cannot create a duplicate connection request.
+- Cancelling removes the pending state and restores the original busy-user action.
+- Desktop and mobile render without horizontal overflow; the 390 px viewport reported equal document scroll and client widths.
+- Browser console errors and warnings: none.
+
+## Iteration
+
+- The first rendered pass showed a redundant green success notice above the amber waiting state.
+- The duplicate notice was removed and the full interaction was repeated successfully.
+
+final result: passed
+
+---
+
 # Super Admin connected-user live controls QA
 
 ## Comparison target

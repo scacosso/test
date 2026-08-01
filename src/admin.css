@@ -423,6 +423,15 @@
 .admin-status svg { flex: 0 0 auto; font-size: 17px; }
 .admin-status--success { color: #147551; background: #e9f7ef; }
 .admin-status--error { color: #9c352a; background: #fff1ef; }
+.admin-status--waiting {
+  color: #725619;
+  background: #fff8df;
+  border-block: 1px solid #f2dda4;
+}
+.admin-status--waiting > div { min-width: 0; display: grid; gap: 2px; }
+.admin-status--waiting strong { font-size: 10px; }
+.admin-status--waiting small { color: #8b733e; font-size: 8px; }
+.admin-status--waiting .admin-button { margin-left: auto; background: #fffdf5; }
 
 .audit-preview { overflow: hidden; }
 .audit-preview > header,
@@ -612,8 +621,15 @@
 .live-room-card dd { margin: 0; overflow: hidden; color: var(--admin-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; text-align: right; }
 .live-user-card__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .live-user-card__actions.is-single { grid-template-columns: 1fr; }
+.live-user-card__actions.is-reserved { grid-template-columns: minmax(0, 1fr) auto; }
 .live-user-card__actions .admin-button { min-width: 0; width: 100%; padding-inline: 10px; }
 .live-user-card__actions .admin-button:disabled { color: #819095; border-color: #dce3e2; background: #edf1f1; }
+.live-user-card__actions .admin-button--waiting:disabled {
+  opacity: 1;
+  color: #725619;
+  border-color: #efd58c;
+  background: #fff8df;
+}
 
 .admin-modal-backdrop,
 .live-review-overlay {

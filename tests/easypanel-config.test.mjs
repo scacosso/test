@@ -7,6 +7,7 @@ const compose = readFileSync("docker-compose.easypanel.yml", "utf8");
 const guestAuthMigration = readFileSync("apps/api/migrations/004_guest_auth.sql", "utf8");
 const liveReviewMigration = readFileSync("apps/api/migrations/005_live_review_modes.sql", "utf8");
 const adminUserAccessMigration = readFileSync("apps/api/migrations/006_admin_user_access.sql", "utf8");
+const adminReservationMigration = readFileSync("apps/api/migrations/007_admin_connection_reservations.sql", "utf8");
 const generated = execFileSync(
   process.execPath,
   ["scripts/generate-easypanel-env.mjs", "app.nexocam.test", "livekit.nexocam.test"],
@@ -79,4 +80,12 @@ test("persists independent connected-user previews and connections", () => {
   assert.match(adminUserAccessMigration, /mode in \('preview', 'connect'\)/i);
   assert.match(adminUserAccessMigration, /target_user_id text not null/i);
   assert.match(adminUserAccessMigration, /session_id uuid references video_sessions/i);
+});
+
+test("persists exclusive expiring superadmin connection reservations", () => {
+  assert.match(adminReservationMigration, /create table if not exists admin_connection_reservations/i);
+  assert.match(adminReservationMigration, /status in \('waiting', 'connecting', 'connected', 'cancelled', 'expired', 'failed'\)/i);
+  assert.match(adminReservationMigration, /target_user_id/i);
+  assert.match(adminReservationMigration, /actor_id/i);
+  assert.match(adminReservationMigration, /where status in \('waiting', 'connecting'\)/i);
 });

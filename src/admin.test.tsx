@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminConsole } from "./admin";
@@ -80,7 +80,7 @@ describe("super admin console", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/me", expect.any(Object)));
   }, 15_000);
 
-  it("lists camera-connected users independently from rooms and only connects available users", async () => {
+  it("lets a superuser reserve a busy user until the current call ends", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/admin/me")) {
@@ -101,7 +101,8 @@ describe("super admin console", () => {
               isGuest: false,
               connectedAt: new Date().toISOString(),
               status: "searching",
-              previewReady: false
+              previewReady: false,
+              reservation: null
             },
             {
               id: "user-b",
@@ -111,9 +112,30 @@ describe("super admin console", () => {
               isGuest: false,
               connectedAt: new Date().toISOString(),
               status: "in_call",
-              previewReady: false
+              previewReady: false,
+              reservation: null
             }
           ]
+        }), { status: 200 });
+      }
+      if (url.endsWith("/api/admin/live/users/user-b/connect")) {
+        return new Response(JSON.stringify({
+          reservationId: "11111111-1111-4111-8111-111111111111",
+          targetUserId: "user-b",
+          status: "waiting",
+          createdAt: "2026-07-31T20:00:00.000Z",
+          expiresAt: "2026-07-31T20:05:00.000Z",
+          failureReason: null
+        }), { status: 202 });
+      }
+      if (url.includes("/api/admin/live/reservations/11111111-1111-4111-8111-111111111111")) {
+        return new Response(JSON.stringify({
+          reservationId: "11111111-1111-4111-8111-111111111111",
+          targetUserId: "user-b",
+          status: "waiting",
+          createdAt: "2026-07-31T20:00:00.000Z",
+          expiresAt: "2026-07-31T20:05:00.000Z",
+          failureReason: null
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
@@ -132,9 +154,22 @@ describe("super admin console", () => {
     expect(screen.getAllByText("b@example.com").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /Vista previa/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Conectar$/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Esperar a que finalice/ })).toBeDisabled();
-    screen.getByRole("button", { name: /^Conectar$/ }).click();
+    expect(screen.getByRole("button", { name: /Esperar a que finalice/ })).toBeEnabled();
+    screen.getByRole("button", { name: /Esperar a que finalice/ }).click();
     expect(await screen.findByRole("heading", { name: /Justificaci.n de la conexi.n/ })).toBeVisible();
-    expect(screen.getByRole("button", { name: /Crear sala y conectar/ })).toBeDisabled();
-  });
+    expect(screen.getByText(/El usuario est. ocupado/)).toBeVisible();
+    const submit = screen.getByRole("button", { name: /Reservar y esperar/ });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText(/asistencia directa solicitada/), {
+      target: { value: "Asistencia del superadmin" }
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(await screen.findByRole("status")).toHaveTextContent("Esperando que termine su conversación");
+    expect(screen.getAllByRole("button", { name: /Cancelar espera/ }).length).toBeGreaterThan(0);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      "/api/admin/live/users/user-b/connect",
+      expect.objectContaining({ method: "POST" })
+    ));
+  }, 15_000);
 });

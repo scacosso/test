@@ -35,6 +35,12 @@ import {
 import { auth, sessionUser } from "./auth.js";
 import { forwardAuthResponseHeaders } from "./auth-response.js";
 import { isAdultDateOfBirth } from "./auth-policy.js";
+import {
+  AdminReservationConflictError,
+  AdminReservationStore,
+  type AdminConnectionDetails,
+  type AdminConnectionReservation
+} from "./admin-reservations.js";
 import { config } from "./config.js";
 import {
   closeSession,
@@ -112,9 +118,18 @@ const clients = new Map<string, Client>();
 const users = new Map<string, Client>();
 const sessions = new Map<string, ActiveSession>();
 const pendingReportEvidence = new Map<string, PendingReportEvidence>();
+const adminReservations = new AdminReservationStore();
 const matcher = config.redisUrl
   ? new RedisMatchmaker(config.redisUrl, isBlocked, isSanctioned)
   : new Matchmaker(isBlocked, isSanctioned);
+
+if (pool) {
+  await pool.query(
+    `update admin_connection_reservations
+     set status = 'expired', resolved_at = now(), failure_reason = 'service_restarted'
+     where status in ('waiting', 'connecting')`
+  );
+}
 
 await app.register(cookie, { secret: config.authSecret });
 await app.register(cors, { origin: config.allowedOrigins, credentials: true });
@@ -326,6 +341,9 @@ const sanctionRevokeSchema = z.object({
 });
 const adminUserConnectSchema = z.object({
   reason: z.string().trim().min(3).max(500)
+});
+const adminReservationCancelSchema = z.object({
+  reason: z.string().trim().min(3).max(500).default("viewer_cancelled")
 });
 const adminUserAccessEndSchema = z.object({
   endReason: z.enum([
@@ -596,6 +614,271 @@ app.get("/api/admin/monitoring", async (request, reply) => {
   };
 });
 
+const reservationResponse = (reservation: AdminConnectionReservation) => ({
+  reservationId: reservation.id,
+  targetUserId: reservation.targetUserId,
+  status: reservation.status,
+  createdAt: reservation.createdAt,
+  expiresAt: reservation.expiresAt,
+  failureReason: reservation.failureReason ?? null,
+  ...(reservation.status === "connected" && reservation.connection
+    ? { connection: reservation.connection }
+    : {})
+});
+
+async function persistReservationTerminal(
+  reservation: AdminConnectionReservation,
+  status: "cancelled" | "expired" | "failed",
+  reason: string
+) {
+  if (!pool) return;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `update admin_connection_reservations
+       set status = $2, resolved_at = now(), failure_reason = $3
+       where id = $1 and status in ('waiting', 'connecting')`,
+      [reservation.id, status, reason]
+    );
+    await client.query(
+      `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+       values ($1, $2, 'user', $3, $4, $5::jsonb)`,
+      [
+        reservation.actorId,
+        `connected_user.reservation_${status}`,
+        reservation.targetUserId,
+        reason,
+        JSON.stringify({ reservationId: reservation.id, status })
+      ]
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function createWaitingAdminReservation(
+  actorId: string,
+  target: Client,
+  reason: string
+) {
+  if (!pool) throw new Error("Database unavailable.");
+  const reservation = adminReservations.create({
+    id: randomUUID(),
+    actorId,
+    targetUserId: target.userId,
+    reason
+  });
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `insert into admin_connection_reservations (
+         id, actor_id, target_user_id, reason, status, created_at, expires_at
+       ) values ($1, $2, $3, $4, 'waiting', $5, $6)`,
+      [
+        reservation.id,
+        reservation.actorId,
+        reservation.targetUserId,
+        reservation.reason,
+        reservation.createdAt,
+        reservation.expiresAt
+      ]
+    );
+    await client.query(
+      `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+       values ($1, 'connected_user.reservation_created', 'user', $2, $3, $4::jsonb)`,
+      [
+        reservation.actorId,
+        reservation.targetUserId,
+        reservation.reason,
+        JSON.stringify({ reservationId: reservation.id, expiresAt: reservation.expiresAt })
+      ]
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    adminReservations.fail(reservation.id, "persistence_failed");
+    throw error;
+  } finally {
+    client.release();
+  }
+  target.adminReservationId = reservation.id;
+  if (!target.sessionId && !target.matchSetup) scheduleAdminReservationFulfillment(target);
+  return reservation;
+}
+
+async function startDedicatedAdminConnection(
+  actorId: string,
+  target: Client,
+  reason: string,
+  reservationId?: string
+): Promise<AdminConnectionDetails> {
+  if (!pool) throw new Error("Database unavailable.");
+  if (target.sessionId || target.matchSetup) throw new Error("Target is still busy.");
+  const reservation = reservationId ? adminReservations.begin(reservationId) : undefined;
+  if (reservationId && !reservation) throw new Error("Reservation is not waiting.");
+
+  const accessId = randomUUID();
+  const sessionId = randomUUID();
+  const roomName = `nexocam-admin-${sessionId}`;
+  const expiresAt = new Date(Date.now() + 5 * 60_000);
+  const previousQueue = target.queue;
+  const guardId = reservationId ?? accessId;
+  target.adminReservationId = guardId;
+  try {
+    await matcher.leave(target.userId);
+    target.queue = undefined;
+    if (reservationId) {
+      await pool.query(
+        `update admin_connection_reservations set status = 'connecting' where id = $1 and status = 'waiting'`,
+        [reservationId]
+      );
+    }
+    const tokens = await prepareRoom(roomName, [actorId, target.userId]);
+    const targetToken = tokens.find((item) => item.identity === target.userId)?.token;
+    const actorToken = tokens.find((item) => item.identity === actorId)?.token;
+    if (!targetToken || !actorToken) throw new Error("LiveKit did not return both room tokens.");
+    if (users.get(target.userId)?.socketId !== target.socketId) {
+      throw new Error("Target disconnected while the admin room was being prepared.");
+    }
+    if (reservationId && adminReservations.get(reservationId)?.status !== "connecting") {
+      throw new Error("Reservation was cancelled while the admin room was being prepared.");
+    }
+    await createSession(sessionId, roomName, actorId, target.userId);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(
+        `insert into admin_user_access (
+           id, actor_id, target_user_id, mode, session_id, room_name,
+           participant_identity, reason, token_expires_at
+         ) values ($1, $2, $3, 'connect', $4, $5, $6, $7, $8)`,
+        [accessId, actorId, target.userId, sessionId, roomName, actorId, reason, expiresAt]
+      );
+      if (reservationId) {
+        const updatedReservation = await client.query(
+          `update admin_connection_reservations
+           set status = 'connected', resolved_at = now(), session_id = $2, access_id = $3
+           where id = $1 and status = 'connecting'`,
+          [reservationId, sessionId, accessId]
+        );
+        if (updatedReservation.rowCount !== 1) {
+          throw new Error("Reservation is no longer available for connection.");
+        }
+      }
+      await client.query(
+        `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
+         values ($1, 'connected_user.connection_started', 'user', $2, $3, $4::jsonb)`,
+        [
+          actorId,
+          target.userId,
+          reason,
+          JSON.stringify({ accessId, sessionId, roomName, reservationId, tokenExpiresAt: expiresAt.toISOString() })
+        ]
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const connection: AdminConnectionDetails = {
+      accessId,
+      sessionId,
+      mode: "connect",
+      targetUserId: target.userId,
+      token: actorToken,
+      livekitUrl: config.livekitUrl,
+      expiresAt: expiresAt.toISOString()
+    };
+    sessions.set(sessionId, {
+      id: sessionId,
+      roomName,
+      users: [actorId, target.userId],
+      kind: "admin",
+      startedAt: new Date().toISOString(),
+      messages: []
+    });
+    target.sessionId = sessionId;
+    target.peerId = actorId;
+    target.adminReservationId = undefined;
+    if (reservationId) adminReservations.complete(reservationId, connection);
+    send(target, "match.found", {
+      sessionId,
+      peerId: actorId,
+      roomName,
+      token: targetToken,
+      livekitUrl: config.livekitUrl,
+      adminConnection: true
+    });
+    return connection;
+  } catch (error) {
+    if (target.adminReservationId === guardId) target.adminReservationId = undefined;
+    await closeSession(sessionId, "admin_connection_failed").catch(() => undefined);
+    await terminateRoom(roomName);
+    if (reservationId) {
+      const failed = adminReservations.fail(reservationId, "connection_setup_failed");
+      if (failed) {
+        await persistReservationTerminal(failed, "failed", "connection_setup_failed")
+          .catch((persistenceError) => app.log.error({ err: persistenceError, reservationId }, "Unable to persist failed admin reservation"));
+      }
+    }
+    if (previousQueue && !target.sessionId && users.get(target.userId)?.socketId === target.socketId) {
+      target.queue = previousQueue;
+      const retry = await matcher.join(previousQueue);
+      await dispatchMatch(retry);
+      if (!target.sessionId) send(target, "queue.state", { state: "searching", waiting: matcher.size });
+    }
+    throw error;
+  }
+}
+
+async function fulfillAdminReservation(target: Client) {
+  const reservation = adminReservations.activeForTarget(target.userId);
+  if (!reservation || reservation.status !== "waiting") return false;
+  if (users.get(target.userId)?.socketId !== target.socketId) {
+    const failed = adminReservations.fail(reservation.id, "target_disconnected");
+    if (failed) await persistReservationTerminal(failed, "failed", "target_disconnected");
+    return false;
+  }
+  if (target.sessionId || target.matchSetup) return false;
+  if (await isSanctioned(target.userId)) {
+    const failed = adminReservations.fail(reservation.id, "target_sanctioned");
+    target.adminReservationId = undefined;
+    if (failed) await persistReservationTerminal(failed, "failed", "target_sanctioned");
+    return false;
+  }
+  try {
+    await startDedicatedAdminConnection(
+      reservation.actorId,
+      target,
+      reservation.reason,
+      reservation.id
+    );
+    return true;
+  } catch (error) {
+    app.log.error({ err: error, reservationId: reservation.id }, "Unable to fulfill admin reservation");
+    return false;
+  }
+}
+
+function scheduleAdminReservationFulfillment(target: Client | undefined) {
+  if (!target?.adminReservationId) return;
+  const timer = setTimeout(() => {
+    void fulfillAdminReservation(target).catch((error) =>
+      app.log.error({ err: error, userId: target.userId }, "Admin reservation fulfillment failed")
+    );
+  }, 0);
+  timer.unref();
+}
+
 app.get("/api/admin/live/users", async (request, reply) => {
   const actor = await requireRole(request, reply, ["superuser"]);
   if (!actor) return;
@@ -623,6 +906,7 @@ app.get("/api/admin/live/users", async (request, reply) => {
     generatedAt: new Date().toISOString(),
     users: connected.map((client) => {
       const account = accountById.get(client.userId);
+      const reservation = adminReservations.activeForTarget(client.userId);
       const status = client.sessionId || client.matchSetup
         ? "in_call"
         : client.adminReservationId
@@ -638,7 +922,10 @@ app.get("/api/admin/live/users", async (request, reply) => {
         isGuest: account?.is_anonymous ?? false,
         connectedAt: client.connectedAt,
         status,
-        previewReady: Boolean(client.previewRoomName && client.previewReady)
+        previewReady: Boolean(client.previewRoomName && client.previewReady),
+        reservation: reservation?.actorId === actor.id
+          ? reservationResponse(reservation)
+          : null
       };
     })
   };
@@ -734,102 +1021,78 @@ app.post("/api/admin/live/users/:id/connect", {
   }
   const target = users.get(targetUserId);
   if (!target) return reply.code(404).send({ error: "user_not_connected" });
-  if (target.sessionId || target.matchSetup || target.adminReservationId) {
-    return reply.code(409).send({ error: "user_busy" });
-  }
   if (await isSanctioned(targetUserId)) {
     return reply.code(409).send({ error: "user_sanctioned" });
   }
   if (!pool) return reply.code(503).send({ error: "database_unavailable" });
+  const existing = adminReservations.activeForTarget(targetUserId);
+  if (existing) {
+    return reply.code(existing.actorId === actor.id ? 200 : 409).send(
+      existing.actorId === actor.id
+        ? reservationResponse(existing)
+        : { error: "user_reserved" }
+    );
+  }
+  const actorReservation = adminReservations.activeForActor(actor.id);
+  if (actorReservation) {
+    return reply.code(409).send({ error: "admin_already_waiting" });
+  }
 
-  const accessId = randomUUID();
-  const sessionId = randomUUID();
-  const roomName = `nexocam-admin-${sessionId}`;
-  const expiresAt = new Date(Date.now() + 5 * 60_000);
-  const previousQueue = target.queue;
-  target.adminReservationId = accessId;
-  await matcher.leave(targetUserId);
-  target.queue = undefined;
-
-  try {
-    const tokens = await prepareRoom(roomName, [actor.id, targetUserId]);
-    const targetToken = tokens.find((item) => item.identity === targetUserId)?.token;
-    const actorToken = tokens.find((item) => item.identity === actor.id)?.token;
-    if (!targetToken || !actorToken) throw new Error("LiveKit did not return both room tokens.");
-    if (users.get(targetUserId)?.socketId !== target.socketId) {
-      throw new Error("Target disconnected while the admin room was being prepared.");
-    }
-    await createSession(sessionId, roomName, actor.id, targetUserId);
-    const client = await pool.connect();
+  const activeSession = target.sessionId ? sessions.get(target.sessionId) : undefined;
+  if (activeSession?.kind === "admin") {
+    return reply.code(409).send({ error: "user_busy" });
+  }
+  if (target.sessionId || target.matchSetup) {
     try {
-      await client.query("begin");
-      await client.query(
-        `insert into admin_user_access (
-           id, actor_id, target_user_id, mode, session_id, room_name,
-           participant_identity, reason, token_expires_at
-         ) values ($1, $2, $3, 'connect', $4, $5, $6, $7, $8)`,
-        [accessId, actor.id, targetUserId, sessionId, roomName, actor.id, parsed.data.reason, expiresAt]
-      );
-      await client.query(
-        `insert into audit_log (actor_id, action, target_type, target_id, reason, metadata)
-         values ($1, 'connected_user.connection_started', 'user', $2, $3, $4::jsonb)`,
-        [
-          actor.id,
-          targetUserId,
-          parsed.data.reason,
-          JSON.stringify({ accessId, sessionId, roomName, tokenExpiresAt: expiresAt.toISOString() })
-        ]
-      );
-      await client.query("commit");
+      const reservation = await createWaitingAdminReservation(actor.id, target, parsed.data.reason);
+      reply.header("cache-control", "no-store");
+      return reply.code(202).send(reservationResponse(reservation));
     } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
+      if (error instanceof AdminReservationConflictError) {
+        return reply.code(409).send({ error: error.code });
+      }
+      request.log.error(error, "Unable to create admin connection reservation");
+      return reply.code(503).send({ error: "reservation_setup_failed" });
     }
-
-    sessions.set(sessionId, {
-      id: sessionId,
-      roomName,
-      users: [actor.id, targetUserId],
-      kind: "admin",
-      startedAt: new Date().toISOString(),
-      messages: []
-    });
-    target.sessionId = sessionId;
-    target.peerId = actor.id;
-    target.adminReservationId = undefined;
-    send(target, "match.found", {
-      sessionId,
-      peerId: actor.id,
-      roomName,
-      token: targetToken,
-      livekitUrl: config.livekitUrl,
-      adminConnection: true
-    });
+  }
+  try {
+    const connection = await startDedicatedAdminConnection(actor.id, target, parsed.data.reason);
     reply.header("cache-control", "no-store");
-    return {
-      accessId,
-      sessionId,
-      mode: "connect",
-      targetUserId,
-      token: actorToken,
-      livekitUrl: config.livekitUrl,
-      expiresAt: expiresAt.toISOString()
-    };
+    return { status: "connected", connection };
   } catch (error) {
-    target.adminReservationId = undefined;
-    await closeSession(sessionId, "admin_connection_failed").catch(() => undefined);
-    await terminateRoom(roomName);
-    if (previousQueue && !target.sessionId && users.get(targetUserId)?.socketId === target.socketId) {
-      target.queue = previousQueue;
-      const retry = await matcher.join(previousQueue);
-      await dispatchMatch(retry);
-      if (!target.sessionId) send(target, "queue.state", { state: "searching", waiting: matcher.size });
-    }
     request.log.error(error, "Unable to create dedicated superuser connection");
     return reply.code(503).send({ error: "connection_setup_failed" });
   }
+});
+
+app.get("/api/admin/live/reservations/:id", async (request, reply) => {
+  const actor = await requireRole(request, reply, ["superuser"]);
+  if (!actor) return;
+  const reservationId = (request.params as { id: string }).id;
+  if (!uuidSchema.safeParse(reservationId).success) {
+    return reply.code(400).send({ error: "invalid_reservation" });
+  }
+  const reservation = adminReservations.getForActor(reservationId, actor.id);
+  if (!reservation) return reply.code(404).send({ error: "reservation_not_found" });
+  reply.header("cache-control", "no-store");
+  return reservationResponse(reservation);
+});
+
+app.post("/api/admin/live/reservations/:id/cancel", async (request, reply) => {
+  if (!requireMutationOrigin(request, reply)) return;
+  const actor = await requireRole(request, reply, ["superuser"]);
+  if (!actor) return;
+  const reservationId = (request.params as { id: string }).id;
+  const parsed = adminReservationCancelSchema.safeParse(request.body ?? {});
+  if (!uuidSchema.safeParse(reservationId).success || !parsed.success) {
+    return reply.code(400).send({ error: "invalid_reservation_cancel" });
+  }
+  const reservation = adminReservations.cancel(reservationId, actor.id, parsed.data.reason);
+  if (!reservation) return reply.code(409).send({ error: "reservation_not_waiting" });
+  const target = users.get(reservation.targetUserId);
+  if (target?.adminReservationId === reservation.id) target.adminReservationId = undefined;
+  await persistReservationTerminal(reservation, "cancelled", parsed.data.reason);
+  return { cancelled: true };
 });
 
 app.post("/api/admin/live/access/:id/end", async (request, reply) => {
@@ -1240,6 +1503,15 @@ async function expireAdminUserAccesses() {
   }
 }
 
+async function expireAdminConnectionReservations() {
+  const expired = adminReservations.expire();
+  for (const reservation of expired) {
+    const target = users.get(reservation.targetUserId);
+    if (target?.adminReservationId === reservation.id) target.adminReservationId = undefined;
+    await persistReservationTerminal(reservation, "expired", "reservation_expired");
+  }
+}
+
 async function endSession(client: Client, reason: string, notifyPeer = true) {
   if (!client.sessionId) return;
   const session = sessions.get(client.sessionId);
@@ -1288,6 +1560,8 @@ async function endSession(client: Client, reason: string, notifyPeer = true) {
     peer.sessionId = peer.peerId = undefined;
     if (notifyPeer) send(peer, "session.peerLeft", { sessionId: id, reason });
   }
+  scheduleAdminReservationFulfillment(client);
+  scheduleAdminReservationFulfillment(peer);
 }
 
 app.get("/ws/v1", { websocket: true }, async (socket, request) => {
@@ -1395,6 +1669,10 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
       }
       if (message.type === "match.next") {
         await endSession(client, "next");
+        if (client.adminReservationId || client.sessionId) {
+          send(client, "queue.state", { state: "reserved" }, message.requestId);
+          return;
+        }
         const payload = queueJoinSchema.parse({ language: message.payload.language ?? "es", country: message.payload.country ?? "AR" });
         client.queue = { userId, socketId: client.socketId, ...payload, joinedAt: Date.now() };
         const result = await matcher.join(client.queue);
@@ -1470,6 +1748,15 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
 
   clientSocket.on("close", async () => {
     await matcher.leave(userId);
+    const reservation = adminReservations.activeForTarget(userId);
+    if (reservation) {
+      const failed = adminReservations.fail(reservation.id, "target_disconnected");
+      client.adminReservationId = undefined;
+      if (failed) {
+        await persistReservationTerminal(failed, "failed", "target_disconnected")
+          .catch((error) => app.log.error({ err: error, reservationId: reservation.id }, "Unable to persist disconnected reservation"));
+      }
+    }
     await endSession(client, "disconnect");
     if (client.previewRoomName) await terminateRoom(client.previewRoomName);
     clients.delete(client.socketId);
@@ -1503,7 +1790,11 @@ const retentionTimer = setInterval(() => {
 }, 24 * 60 * 60 * 1000);
 retentionTimer.unref();
 const liveReviewTimer = setInterval(() => {
-  void Promise.all([expireLiveReviews(), expireAdminUserAccesses()])
+  void Promise.all([
+    expireLiveReviews(),
+    expireAdminUserAccesses(),
+    expireAdminConnectionReservations()
+  ])
     .catch((error) => app.log.error(error, "Live-access expiration failed"));
 }, 15 * 1000);
 liveReviewTimer.unref();
