@@ -119,6 +119,8 @@ type ConnectedLiveUser = {
   connectedAt: string;
   status: "online" | "searching" | "connecting" | "in_call";
   previewReady: boolean;
+  snapshotReady: boolean;
+  snapshotCapturedAt: string | null;
   reservation: AdminReservationView | null;
 };
 
@@ -1685,7 +1687,13 @@ function LiveReviewPage({ locale }: { locale: AdminLocale }) {
                 <code>{user.id.slice(0, 8)}</code>
               </header>
               <Suspense fallback={<div className="connected-user-preview"><SpinnerGap className="spin" /></div>}>
-                <AdminUserPreview locale={locale} previewReady={user.previewReady} userId={user.id} />
+                <AdminUserPreview
+                  locale={locale}
+                  previewReady={user.previewReady}
+                  snapshotCapturedAt={user.snapshotCapturedAt}
+                  snapshotReady={user.snapshotReady}
+                  userId={user.id}
+                />
               </Suspense>
               <div className="live-user-card__identity">
                 <span><UserCircle weight="duotone" /></span>

@@ -1,5 +1,5 @@
 import { Room, RoomEvent, Track, VideoQuality, type RemoteTrack } from "livekit-client";
-import { SpinnerGap, VideoCameraSlash, Warning } from "@phosphor-icons/react";
+import { Camera, SpinnerGap, VideoCameraSlash, Warning } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
 type PreviewAccess = {
@@ -13,11 +13,15 @@ type PreviewAccess = {
 export default function AdminUserPreview(props: {
   locale: "es" | "en";
   previewReady: boolean;
+  snapshotCapturedAt: string | null;
+  snapshotReady: boolean;
   userId: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [visible, setVisible] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [renewal, setRenewal] = useState(0);
   const [state, setState] = useState<"waiting" | "loading" | "playing" | "error">("waiting");
 
@@ -37,7 +41,7 @@ export default function AdminUserPreview(props: {
   }, []);
 
   useEffect(() => {
-    if (!visible || !props.previewReady) {
+    if (!visible || !hovering || !props.previewReady) {
       setState("waiting");
       return;
     }
@@ -124,30 +128,78 @@ export default function AdminUserPreview(props: {
       if (room) void room.disconnect(false);
       if (access) closeAccess(access);
     };
-  }, [props.previewReady, props.userId, renewal, visible]);
+  }, [hovering, props.previewReady, props.userId, renewal, visible]);
 
   const copy = props.locale === "es"
     ? {
-        error: "Vista previa no disponible",
-        loading: "Abriendo cámara…",
-        waiting: props.previewReady ? "Esperando video…" : "Activando cámara…"
+        error: "Vista en vivo no disponible",
+        hint: "Pasa el mouse para ver en vivo",
+        live: "EN VIVO",
+        loading: "Abriendo video en vivo…",
+        snapshot: "FOTO · 10 S",
+        waiting: props.snapshotReady ? "Cargando captura…" : "Esperando la primera captura…"
       }
     : {
-        error: "Preview unavailable",
-        loading: "Opening camera…",
-        waiting: props.previewReady ? "Waiting for video…" : "Starting camera…"
+        error: "Live preview unavailable",
+        hint: "Hover to view live video",
+        live: "LIVE",
+        loading: "Opening live video…",
+        snapshot: "PHOTO · 10 S",
+        waiting: props.snapshotReady ? "Loading snapshot…" : "Waiting for the first snapshot…"
       };
+  const snapshotUrl = props.snapshotReady && props.snapshotCapturedAt
+    ? `/api/admin/live/users/${encodeURIComponent(props.userId)}/snapshot?v=${encodeURIComponent(props.snapshotCapturedAt)}`
+    : null;
 
   return (
-    <div className="connected-user-preview" ref={hostRef}>
-      <video ref={videoRef} autoPlay muted playsInline aria-label={copy.waiting} />
-      {state !== "playing" ? (
+    <div
+      aria-label={copy.hint}
+      className="connected-user-preview"
+      data-live-state={hovering ? state : "snapshot"}
+      onBlur={() => setHovering(false)}
+      onFocus={() => setHovering(true)}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+      ref={hostRef}
+      tabIndex={0}
+      title={copy.hint}
+    >
+      {snapshotUrl ? (
+        <img
+          alt={props.locale === "es" ? "Captura reciente de la cámara" : "Recent camera snapshot"}
+          onError={() => setSnapshotLoaded(false)}
+          onLoad={() => setSnapshotLoaded(true)}
+          src={snapshotUrl}
+        />
+      ) : null}
+      <video
+        aria-hidden={state !== "playing"}
+        aria-label={state === "playing" ? copy.live : undefined}
+        autoPlay
+        className={state === "playing" ? "is-playing" : ""}
+        muted
+        playsInline
+        ref={videoRef}
+      />
+      {hovering && state !== "playing" ? (
         <div className="connected-user-preview__state">
           {state === "loading" ? <SpinnerGap className="spin" /> : state === "error" ? <Warning /> : <VideoCameraSlash />}
           <span>{state === "loading" ? copy.loading : state === "error" ? copy.error : copy.waiting}</span>
         </div>
+      ) : !snapshotLoaded ? (
+        <div className="connected-user-preview__state">
+          <Camera />
+          <span>{copy.waiting}</span>
+        </div>
       ) : null}
-      <span className="connected-user-preview__live"><i />{props.locale === "es" ? "EN VIVO" : "LIVE"}</span>
+      {state === "playing" ? (
+        <span className="connected-user-preview__live"><i />{copy.live}</span>
+      ) : (
+        <>
+          <span className="connected-user-preview__live is-snapshot"><Camera />{copy.snapshot}</span>
+          {snapshotLoaded && !hovering ? <span className="connected-user-preview__hint">{copy.hint}</span> : null}
+        </>
+      )}
     </div>
   );
 }

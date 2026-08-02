@@ -81,6 +81,25 @@ No actionable P0, P1, or P2 findings remain.
 
 final result: passed
 
+## Connected-user snapshot and hover-live QA
+
+- Target route: `/admin/live`
+- Desktop viewport: 1280 × 720
+- Mobile viewport: 390 × 844
+- Default state: a compressed still image with `FOTO · 10 S` and a clear hover hint; no LiveKit subscriber is created while the card is idle.
+- Refresh evidence: the same visible card changed its snapshot URL from `2026-08-02T23:38:00.000Z` to `2026-08-02T23:38:10.000Z` while `data-live-state` remained `snapshot`.
+- Interaction evidence: keyboard focus rendered `Abriendo video en vivo…`; component tests exercised the equivalent mouse-enter path through track subscription to `EN VIVO`, then mouse-leave through room disconnect, access termination, and restoration of the still image.
+- Responsive evidence: the mobile card preserves the full 16:9 image, labels, identity, status, and Connect action with `clientWidth: 390` and `scrollWidth: 390`.
+- Console evidence: no application errors or warnings in the final idle desktop and mobile states.
+
+### Mismatch ledger
+
+- [Fixed] The previous implementation opened a LiveKit subscription as soon as the card entered the viewport.
+- [Fixed] The live badge was visible even when the user had not requested live video.
+- [Fixed] There was no lightweight ten-second still-image channel independent from the live preview.
+
+final result: passed
+
 ---
 
 # Super Admin busy-user reservation QA

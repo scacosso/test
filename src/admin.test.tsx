@@ -102,6 +102,8 @@ describe("super admin console", () => {
               connectedAt: new Date().toISOString(),
               status: "searching",
               previewReady: false,
+              snapshotReady: false,
+              snapshotCapturedAt: null,
               reservation: null
             },
             {
@@ -113,6 +115,8 @@ describe("super admin console", () => {
               connectedAt: new Date().toISOString(),
               status: "in_call",
               previewReady: false,
+              snapshotReady: false,
+              snapshotCapturedAt: null,
               reservation: null
             }
           ]

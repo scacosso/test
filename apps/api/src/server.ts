@@ -7,7 +7,13 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
-import { clientEventTypes, queueJoinSchema, reportSchema, wsEnvelopeSchema } from "@nexocam/shared";
+import {
+  clientEventTypes,
+  presenceSnapshotSchema,
+  queueJoinSchema,
+  reportSchema,
+  wsEnvelopeSchema
+} from "@nexocam/shared";
 import { z } from "zod";
 import {
   adminRoles,
@@ -73,6 +79,7 @@ import {
 import { purgeExpiredEvidence } from "./retention.js";
 import { RedisMatchmaker } from "./redis-matchmaker.js";
 import { consumeWsTicket, createWsTicket, websocketTicketFromProtocols } from "./ws-ticket.js";
+import { decodePresenceSnapshot, type PresenceSnapshot } from "./presence-snapshot.js";
 
 type SocketLike = {
   readyState: number;
@@ -89,6 +96,7 @@ type Client = {
   peerId?: string;
   previewRoomName?: string;
   previewReady?: boolean;
+  previewSnapshot?: PresenceSnapshot;
   adminReservationId?: string;
   matchSetup?: boolean;
   queue?: { userId: string; socketId: string; language: string; country: string; joinedAt: number };
@@ -923,12 +931,35 @@ app.get("/api/admin/live/users", async (request, reply) => {
         connectedAt: client.connectedAt,
         status,
         previewReady: Boolean(client.previewRoomName && client.previewReady),
+        snapshotReady: Boolean(client.previewSnapshot),
+        snapshotCapturedAt: client.previewSnapshot?.capturedAt ?? null,
         reservation: reservation?.actorId === actor.id
           ? reservationResponse(reservation)
           : null
       };
     })
   };
+});
+
+app.get("/api/admin/live/users/:id/snapshot", {
+  config: { rateLimit: { max: 1_200, timeWindow: "1 minute" } }
+}, async (request, reply) => {
+  const actor = await requireRole(request, reply, ["superuser"]);
+  if (!actor) return;
+  const targetUserId = (request.params as { id: string }).id;
+  if (!targetUserId || targetUserId.length > 128 || targetUserId === actor.id) {
+    return reply.code(400).send({ error: "invalid_target_user" });
+  }
+  const target = users.get(targetUserId);
+  if (!target) return reply.code(404).send({ error: "user_not_connected" });
+  if (!target.previewSnapshot) return reply.code(404).send({ error: "camera_snapshot_not_ready" });
+  reply
+    .header("cache-control", "private, no-store, max-age=0")
+    .header("content-security-policy", "default-src 'none'")
+    .header("x-content-type-options", "nosniff")
+    .header("x-snapshot-captured-at", target.previewSnapshot.capturedAt)
+    .type("image/jpeg");
+  return reply.send(target.previewSnapshot.image);
 });
 
 app.post("/api/admin/live/users/:id/preview", {
@@ -1635,6 +1666,11 @@ app.get("/ws/v1", { websocket: true }, async (socket, request) => {
       }
       if (message.type === "presence.preview.unavailable") {
         client.previewReady = false;
+        return;
+      }
+      if (message.type === "presence.snapshot") {
+        const snapshot = presenceSnapshotSchema.parse(message.payload);
+        client.previewSnapshot = decodePresenceSnapshot(snapshot.image);
         return;
       }
       if (message.type === "heartbeat") {

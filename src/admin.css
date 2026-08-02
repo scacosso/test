@@ -601,12 +601,21 @@
   background:
     radial-gradient(circle at 82% 18%, rgba(85, 213, 194, .24), transparent 32%),
     linear-gradient(145deg, #07303d, #0d4752);
+  cursor: zoom-in;
+  outline: none;
 }
-.connected-user-preview > video { width: 100%; height: 100%; position: absolute; inset: 0; display: block; object-fit: cover; background: #082f3a; }
-.connected-user-preview__state { position: relative; z-index: 1; display: grid; place-items: center; gap: 8px; color: #aed8d5; font-size: 9px; }
+.connected-user-preview:focus-visible { box-shadow: 0 0 0 3px rgba(23, 176, 164, .32); }
+.connected-user-preview > img,
+.connected-user-preview > video { width: 100%; height: 100%; position: absolute; z-index: 0; inset: 0; display: block; object-fit: cover; background: #082f3a; }
+.connected-user-preview > video { opacity: 0; transition: opacity 140ms ease; }
+.connected-user-preview > video.is-playing { z-index: 1; opacity: 1; }
+.connected-user-preview__state { position: relative; z-index: 2; display: grid; place-items: center; gap: 8px; color: #aed8d5; font-size: 9px; }
 .connected-user-preview__state svg { font-size: 28px; }
-.connected-user-preview__live { padding: 4px 6px; position: absolute; z-index: 2; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; color: #fff; border-radius: 4px; background: rgba(2, 24, 32, .72); font-size: 7px; font-weight: 700; }
+.connected-user-preview__live { padding: 4px 6px; position: absolute; z-index: 3; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; color: #fff; border-radius: 4px; background: rgba(2, 24, 32, .72); font-size: 7px; font-weight: 700; }
 .connected-user-preview__live i { width: 6px; height: 6px; border-radius: 50%; background: #39d58a; }
+.connected-user-preview__live.is-snapshot { color: #d5e9e7; }
+.connected-user-preview__live.is-snapshot svg { font-size: 10px; }
+.connected-user-preview__hint { padding: 4px 6px; position: absolute; z-index: 2; left: 8px; bottom: 8px; color: #fff; border-radius: 4px; background: rgba(2, 24, 32, .68); font-size: 7px; font-weight: 600; }
 .live-user-card__identity { min-width: 0; margin-bottom: 12px; display: flex; align-items: center; gap: 9px; }
 .live-user-card__identity > span { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; color: #4e777d; border-radius: 50%; background: #e8f2f1; }
 .live-user-card__identity > span svg { font-size: 26px; }

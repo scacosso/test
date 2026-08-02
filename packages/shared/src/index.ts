@@ -11,6 +11,7 @@ export const clientEventTypes = [
   "session.block",
   "presence.preview.ready",
   "presence.preview.unavailable",
+  "presence.snapshot",
   "heartbeat"
 ] as const;
 
@@ -41,6 +42,12 @@ export type WsEnvelope = z.infer<typeof wsEnvelopeSchema>;
 export const queueJoinSchema = z.object({
   language: z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toLowerCase()),
   country: z.string().regex(/^[A-Z]{2}$/i).transform((value) => value.toUpperCase())
+});
+
+export const presenceSnapshotSchema = z.object({
+  image: z.string()
+    .startsWith("data:image/jpeg;base64,")
+    .max(180_000)
 });
 
 export const reportReasons = ["nudity", "harassment", "violence", "spam", "possible_minor"] as const;

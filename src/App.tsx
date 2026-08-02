@@ -43,6 +43,10 @@ import {
   connectPreviewPublisherSession,
   disconnectLiveKitSession
 } from "./livekit-session";
+import {
+  PRESENCE_SNAPSHOT_INTERVAL_MS,
+  capturePresenceSnapshot
+} from "./presence-snapshot";
 
 type Locale = "es" | "en";
 type ChatState =
@@ -784,7 +788,25 @@ function ChatPage() {
             socket.send(JSON.stringify({ type: "heartbeat", requestId: crypto.randomUUID(), payload: {}, version: 1 }));
           }
         }, 5_000);
-        socket.addEventListener("close", () => window.clearInterval(heartbeat), { once: true });
+        const publishSnapshot = () => {
+          const hasLiveCamera = stream.getVideoTracks().some((track) => track.readyState === "live" && track.enabled);
+          if (!hasLiveCamera || socket.readyState !== WebSocket.OPEN) return;
+          const image = capturePresenceSnapshot(camera.videoRef.current);
+          if (!image) return;
+          socket.send(JSON.stringify({
+            type: "presence.snapshot",
+            requestId: crypto.randomUUID(),
+            payload: { image },
+            version: 1
+          }));
+        };
+        const firstSnapshot = window.setTimeout(publishSnapshot, 750);
+        const snapshotInterval = window.setInterval(publishSnapshot, PRESENCE_SNAPSHOT_INTERVAL_MS);
+        socket.addEventListener("close", () => {
+          window.clearInterval(heartbeat);
+          window.clearInterval(snapshotInterval);
+          window.clearTimeout(firstSnapshot);
+        }, { once: true });
       });
       socket.addEventListener("message", async (event) => {
         const message = JSON.parse(String(event.data));
