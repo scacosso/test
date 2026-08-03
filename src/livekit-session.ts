@@ -22,6 +22,7 @@ type ConnectOptions = {
 
 type PreviewPublisherOptions = {
   onDisconnected: () => void;
+  publishCamera?: boolean;
   stream: MediaStream;
   token: string;
   url: string;
@@ -90,11 +91,12 @@ export async function disconnectLiveKitSession(room: LiveKitRoom | null) {
 
 export async function connectPreviewPublisherSession({
   onDisconnected,
+  publishCamera = true,
   stream,
   token,
   url
 }: PreviewPublisherOptions): Promise<LiveKitRoom> {
-  const { Room, RoomEvent, Track } = await import("livekit-client");
+  const { Room, RoomEvent } = await import("livekit-client");
   const room = new Room({
     adaptiveStream: false,
     dynacast: true,
@@ -103,15 +105,33 @@ export async function connectPreviewPublisherSession({
   room.on(RoomEvent.Disconnected, onDisconnected);
   try {
     await room.connect(url, token);
-    const cameraTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
-    if (!cameraTrack) throw new Error("Camera track is not available for preview.");
-    await room.localParticipant.publishTrack(cameraTrack, {
-      source: Track.Source.Camera,
-      simulcast: true
-    });
+    if (publishCamera) await resumePreviewPublisherSession(room, stream);
     return room;
   } catch (error) {
     await room.disconnect(false);
     throw error;
   }
+}
+
+export async function pausePreviewPublisherSession(room: LiveKitRoom | null) {
+  if (!room) return;
+  const publications = [...room.localParticipant.videoTrackPublications.values()];
+  await Promise.all(publications.map(async (publication) => {
+    if (!publication.track) return;
+    await room.localParticipant.unpublishTrack(publication.track, false);
+  }));
+}
+
+export async function resumePreviewPublisherSession(
+  room: LiveKitRoom | null,
+  stream: MediaStream
+) {
+  if (!room || room.localParticipant.videoTrackPublications.size > 0) return;
+  const cameraTrack = stream.getVideoTracks().find((track) => track.readyState === "live" && track.enabled);
+  if (!cameraTrack) throw new Error("Camera track is not available for preview.");
+  const { Track } = await import("livekit-client");
+  await room.localParticipant.publishTrack(cameraTrack, {
+    source: Track.Source.Camera,
+    simulcast: true
+  });
 }

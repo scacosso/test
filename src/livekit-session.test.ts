@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   connectLiveKitSession,
   connectPreviewPublisherSession,
-  disconnectLiveKitSession
+  disconnectLiveKitSession,
+  pausePreviewPublisherSession,
+  resumePreviewPublisherSession
 } from "./livekit-session";
 
 const liveKitHarness = vi.hoisted(() => ({
@@ -11,7 +13,11 @@ const liveKitHarness = vi.hoisted(() => ({
     connect: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
     emit: (event: string, ...args: unknown[]) => void;
-    localParticipant: { publishTrack: ReturnType<typeof vi.fn> };
+    localParticipant: {
+      publishTrack: ReturnType<typeof vi.fn>;
+      unpublishTrack: ReturnType<typeof vi.fn>;
+      videoTrackPublications: Map<string, { track: unknown }>;
+    };
   }>
 }));
 
@@ -20,10 +26,18 @@ vi.mock("livekit-client", () => {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     connect = vi.fn(async () => undefined);
     disconnect = vi.fn(async () => undefined);
+    videoTrackPublications = new Map<string, { track: unknown }>();
     localParticipant = {
-      publishTrack: vi.fn(async () => {
+      publishTrack: vi.fn(async (track: { kind?: string }) => {
         if (liveKitHarness.failPublish) throw new Error("publish failed");
-      })
+        if (track.kind === "video") this.videoTrackPublications.set("camera", { track });
+      }),
+      unpublishTrack: vi.fn(async (track: unknown) => {
+        for (const [key, publication] of this.videoTrackPublications) {
+          if (publication.track === track) this.videoTrackPublications.delete(key);
+        }
+      }),
+      videoTrackPublications: this.videoTrackPublications
     };
 
     constructor() {
@@ -67,7 +81,7 @@ describe("LiveKit browser session", () => {
     const video = document.createElement("video");
     const audio = document.createElement("audio");
     vi.spyOn(audio, "play").mockResolvedValue();
-    const localVideo = { kind: "video", readyState: "live" };
+    const localVideo = { kind: "video", readyState: "live", enabled: true };
     const localAudio = { kind: "audio", readyState: "live" };
     const onRemoteVideoChange = vi.fn();
 
@@ -124,7 +138,7 @@ describe("LiveKit browser session", () => {
   });
 
   it("publishes only the camera to the independent presence room", async () => {
-    const localVideo = { kind: "video", readyState: "live" };
+    const localVideo = { kind: "video", readyState: "live", enabled: true };
     const localAudio = { kind: "audio", readyState: "live" };
     await connectPreviewPublisherSession({
       url: "wss://livekit.example.test",
@@ -143,5 +157,29 @@ describe("LiveKit browser session", () => {
       source: "camera",
       simulcast: true
     });
+  });
+
+  it("keeps the presence room connected while pausing camera publication during a call", async () => {
+    const localVideo = { kind: "video", readyState: "live", enabled: true };
+    const stream = { getVideoTracks: () => [localVideo] } as unknown as MediaStream;
+    const room = await connectPreviewPublisherSession({
+      url: "wss://livekit.example.test",
+      token: "preview-token",
+      stream,
+      publishCamera: false,
+      onDisconnected: vi.fn()
+    });
+    const fakeRoom = liveKitHarness.rooms[0];
+
+    expect(fakeRoom.localParticipant.publishTrack).not.toHaveBeenCalled();
+    await resumePreviewPublisherSession(room, stream);
+    expect(fakeRoom.localParticipant.publishTrack).toHaveBeenCalledWith(localVideo, {
+      source: "camera",
+      simulcast: true
+    });
+
+    await pausePreviewPublisherSession(room);
+    expect(fakeRoom.localParticipant.unpublishTrack).toHaveBeenCalledWith(localVideo, false);
+    expect(fakeRoom.localParticipant.videoTrackPublications.size).toBe(0);
   });
 });

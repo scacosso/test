@@ -41,7 +41,9 @@ import { getBrowserSession, hasActiveSession, signOutBrowserSession } from "./au
 import {
   connectLiveKitSession,
   connectPreviewPublisherSession,
-  disconnectLiveKitSession
+  disconnectLiveKitSession,
+  pausePreviewPublisherSession,
+  resumePreviewPublisherSession
 } from "./livekit-session";
 import {
   PRESENCE_SNAPSHOT_INTERVAL_MS,
@@ -632,6 +634,9 @@ function ChatPage() {
   const socketRef = useRef<WebSocket | null>(null);
   const roomRef = useRef<import("livekit-client").Room | null>(null);
   const previewRoomRef = useRef<import("livekit-client").Room | null>(null);
+  const previewPublishingDesiredRef = useRef(true);
+  const previewPublishingSyncRef = useRef<Promise<void>>(Promise.resolve());
+  const callActiveRef = useRef(false);
   const connectionGenerationRef = useRef(0);
   const closingSocketRef = useRef(false);
   const pendingIncidentRef = useRef<{ requestId: string; kind: "reported" | "blocked" } | null>(null);
@@ -683,6 +688,32 @@ function ChatPage() {
     return null;
   };
 
+  const setPreviewPublishing = (shouldPublish: boolean) => {
+    previewPublishingDesiredRef.current = shouldPublish;
+    const operation = previewPublishingSyncRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const room = previewRoomRef.current;
+        if (!room) return;
+        const publish = previewPublishingDesiredRef.current && !callActiveRef.current;
+        if (publish) {
+          const stream = mediaStreamRef.current;
+          if (!stream) return;
+          await resumePreviewPublisherSession(room, stream);
+          sendEnvelope("presence.preview.ready");
+        } else {
+          await pausePreviewPublisherSession(room);
+          sendEnvelope("presence.preview.unavailable");
+        }
+      })
+      .catch((error) => {
+        console.error("Unable to update the camera-presence publisher", error);
+        sendEnvelope("presence.preview.unavailable");
+      });
+    previewPublishingSyncRef.current = operation;
+    return operation;
+  };
+
   const clearRemoteMedia = () => {
     setRemoteVideoActive(false);
     if (remoteRef.current) remoteRef.current.srcObject = null;
@@ -723,7 +754,9 @@ function ChatPage() {
         onDisconnected: () => {
           if (roomRef.current === connectedRoom) {
             roomRef.current = null;
+            callActiveRef.current = false;
             clearRemoteMedia();
+            void setPreviewPublishing(true);
             setState("peer-left");
           }
         }
@@ -811,16 +844,23 @@ function ChatPage() {
       socket.addEventListener("message", async (event) => {
         const message = JSON.parse(String(event.data));
         if (message.type === "match.found") {
+          callActiveRef.current = true;
           setState("connecting");
           setMessages([]);
           if (message.payload.livekitUrl && message.payload.token) {
             try {
+              await setPreviewPublishing(false);
               await connectLiveKit(message.payload.livekitUrl, message.payload.token);
-            } catch {
+            } catch (error) {
+              callActiveRef.current = false;
+              void setPreviewPublishing(true);
+              console.error("Unable to connect the LiveKit match", error);
               clearRemoteMedia();
               setState("connection-error");
             }
           } else {
+            callActiveRef.current = false;
+            void setPreviewPublishing(true);
             setState("connection-error");
           }
         }
@@ -836,6 +876,7 @@ function ChatPage() {
               url: message.payload.livekitUrl,
               token: message.payload.token,
               stream,
+              publishCamera: false,
               onDisconnected: () => {
                 if (previewRoomRef.current === presenceRoom) {
                   previewRoomRef.current = null;
@@ -844,21 +885,30 @@ function ChatPage() {
               }
             });
             previewRoomRef.current = presenceRoom;
-            sendEnvelope("presence.preview.ready");
-          } catch {
+            await setPreviewPublishing(!callActiveRef.current);
+          } catch (error) {
+            console.error("Unable to connect the camera-presence room", error);
             sendEnvelope("presence.preview.unavailable");
           }
         }
-        if (message.type === "queue.state" && message.payload.state === "searching") setState("searching");
+        if (message.type === "queue.state" && message.payload.state === "searching") {
+          callActiveRef.current = false;
+          setState("searching");
+          void setPreviewPublishing(true);
+        }
         if (message.type === "chat.message") setMessages((items) => [...items, { mine: false, text: message.payload.text }]);
         if (message.type === "session.peerLeft") {
+          callActiveRef.current = false;
           await disconnectRoom();
+          void setPreviewPublishing(true);
           setState("peer-left");
         }
         if (message.type === "session.ended") {
           const pending = pendingIncidentRef.current;
           if (!pending || !message.requestId || message.requestId === pending.requestId) {
+            callActiveRef.current = false;
             await disconnectRoom();
+            void setPreviewPublishing(true);
             pendingIncidentRef.current = null;
             setReportSubmitting(false);
             setReportError("");
@@ -866,7 +916,11 @@ function ChatPage() {
             setState(message.payload.reason === "reported" ? "reported" : message.payload.reason === "blocked" ? "blocked" : "peer-left");
           }
         }
-        if (message.type === "account.sanctioned") setState("suspended");
+        if (message.type === "account.sanctioned") {
+          callActiveRef.current = false;
+          void setPreviewPublishing(false);
+          setState("suspended");
+        }
         if (message.type === "error") {
           const pending = pendingIncidentRef.current;
           if (pending && (!message.requestId || message.requestId === pending.requestId)) {
@@ -878,6 +932,8 @@ function ChatPage() {
                 : "We couldn't save the report. Please try again.");
             }
           } else {
+            callActiveRef.current = false;
+            void setPreviewPublishing(true);
             setState("connection-error");
           }
         }
@@ -886,6 +942,10 @@ function ChatPage() {
       socket.addEventListener("close", (event) => {
         if (socketRef.current === socket) socketRef.current = null;
         if (closingSocketRef.current) return;
+        callActiveRef.current = false;
+        const previewRoom = previewRoomRef.current;
+        previewRoomRef.current = null;
+        void disconnectLiveKitSession(previewRoom);
         clearRemoteMedia();
         setState(event.code === 1008 ? "auth-required" : "connection-error");
       });
@@ -905,6 +965,7 @@ function ChatPage() {
   }, [camera.stream, muted]);
   useEffect(() => {
     camera.stream?.getVideoTracks().forEach((track) => { track.enabled = !cameraOff; });
+    void setPreviewPublishing(!cameraOff);
   }, [camera.stream, cameraOff]);
   useEffect(() => () => {
     closingSocketRef.current = true;
@@ -941,6 +1002,8 @@ function ChatPage() {
       setState("connection-error");
       return;
     }
+    callActiveRef.current = false;
+    void setPreviewPublishing(false);
     sendEnvelope("match.next", { language: locale, country: "AR" });
     void disconnectRoom();
     setMessages([]);
